@@ -40,7 +40,7 @@ try {
     $css = Join-Path $tempDir "src/renderer/src/ui/styles.css"
     if (-not (Test-Path -LiteralPath $css)) { throw "CSS principal nao encontrado." }
     $cssLines = [IO.File]::ReadAllLines($css, [Text.Encoding]::UTF8)
-    $cleanCssLines = @($cssLines | Where-Object { $_ -notmatch '(?i)\\.editor-v7' })
+    $cleanCssLines = @($cssLines | Where-Object { $_ -notmatch 'editor-v7' })
     if ($cleanCssLines.Count -ne $cssLines.Length) {
       [IO.File]::WriteAllText($css, (($cleanCssLines -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
       Write-Host "CSS legado da versao experimental removido."
