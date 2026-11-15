@@ -23,7 +23,8 @@ void FabricatorWorkspace::setBundle(const nymi::NativeBundle& bundle) {
     error_ = scan.issues.join("; ");
     selectedSlot_ = 1;
     clearEditState();
-    selectSlot(1);
+    // Show the first populated model rather than an empty default slot.
+    selectSlot(models_.isEmpty() ? 1 : models_.first().slot);
 }
 void FabricatorWorkspace::clearEditState() {
     working_.reset(); original_.reset(); undo_.clear(); redo_.clear();

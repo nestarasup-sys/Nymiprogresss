@@ -40,3 +40,15 @@ ctest --test-dir build/qt --build-config Release --output-on-failure
 Fabricador DEV, Customizador, Studio, Roteiros, Base de vídeos, Editor V6, Biblioteca V6 e Logs DEV continuam no escopo. Somente os **dados históricos** de Fabricador/Customizador/Base de vídeos foram convertidos; os outros módulos terão novos dados e ainda precisam de implementação nativa.
 
 Veja `docs-atuais/NATIVO-RODADAS-01-03.md` para o escopo entregue, limitações e próximos testes. Os documentos antigos continuam arquivados em `Lixo/`; decisões atuais ficam em `docs-atuais/`.
+
+## Fabricador DEV: início da reconstrução fiel (3 rodadas)
+
+- A navegação Qt agora replica as **12 seções** e a tela Modelos conta com os **10 slots** do Fabricador original.
+- O `FabricatorProjectReader` usa exclusivamente o bundle nativo v1 e extrai projetos, camadas e imagens de peças convertidas; não abre formatos legados.
+- A nova tela tem canvas nativo (imagens por peça, ordem de camadas, zoom, pan e seleção), painel **Peças/Camadas/Juntas**, coordenadas e rotação de peças, ocultar/mostrar, desfazer/refazer.
+- **Salvar rascunho** cria somente um patch de transformações no diretório privado da aplicação, nunca no bundle nem no Git; **Carregar** verifica a identidade SHA-256 do modelo original. É possível restaurar as posições e excluir o rascunho local com confirmação.
+- A compatibilidade com os modelos pessoais ainda precisa ser observada no Windows. O CI Linux compila e executa testes sintéticos + smoke test QML.
+
+**Importante:** as 12 seções aparecem, mas só **Modelos Dev** tem ferramentas nativas nesta fase. Não há, ainda, importação de folhas, chroma, deformação, salvamento integral de projetos, nem ferramentas nativas para poses/roupas/rostos/cabelos/animações. O Electron continua intacto para comparação e uso dessas funções.
+
+Depois de `git pull --ff-only origin main`, execute `COMPILAR_NATIVO.bat` e `ABRIR_NATIVO.bat`. Para detalhes técnicos e mapeamento para o Electron, veja `docs-atuais/FABRICADOR-NATIVO-FASE-1.md`.
