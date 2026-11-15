@@ -3,7 +3,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$expected = "b2d34839375ab71601933b76199762ef4d98ca5a8baca05848eb49f66b63aea4"
+$expected = "5b00f45a8f3edfc389c5dfdb28e533dc72624d1eecfabd975d0cfba79041dbdf"
 function MustRunGit([string[]]$Arguments) {
     & git @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Git falhou: $($Arguments -join ' ')" }
@@ -37,11 +37,11 @@ try {
       New-Item -Path (Split-Path -Parent $dest) -ItemType Directory -Force | Out-Null
       Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
     }
-    MustRunGit @("add", "-A")
-    MustRunGit @("diff", "--cached", "--check")
-    MustRunGit @("commit", "-m", "feat: importar fonte completa com Editor V6 e todas as areas; arquivar docs")
+    MustRunGit -Arguments @("add", "-A")
+    MustRunGit -Arguments @("diff", "--cached", "--check")
+    MustRunGit -Arguments @("commit", "-m", "feat: importar fonte completa com Editor V6 e todas as areas; arquivar docs")
     Write-Host "Commit criado. Enviando ao GitHub..."
-    MustRunGit @("push", "origin", "main")
+    MustRunGit -Arguments @("push", "origin", "main")
     Write-Host "Fonte importada e publicada com sucesso."
   } finally {
     if (Test-Path $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
