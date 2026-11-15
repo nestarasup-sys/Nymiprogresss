@@ -40,3 +40,9 @@ test('rejects unsupported formats, missing domains, invalid asset paths and Edit
   assert.throws(() => assertSafeBundleRelativePath('C:/outside.png'), /Caminho relativo/)
   assert.doesNotThrow(() => assertSafeBundleRelativePath('assets/sha256/ab/file'))
 })
+
+test('rejects opaque legacy rows in a supposedly converted native domain', () => {
+  const manifest = validManifest()
+  manifest.domains.roteiros.data.preservedUnknown.push({ sourceTable: 'legacy_table', values: { payload: 'opaque' } })
+  assert.throws(() => assertNativeDataManifest(manifest), /linhas brutas ou dados não classificados/)
+})

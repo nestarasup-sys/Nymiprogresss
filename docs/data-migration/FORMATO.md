@@ -12,7 +12,7 @@ native-data/
   assets/sha256/<2 primeiros hex>/<sha256 completo>
 ```
 
-`manifest.json` é UTF-8 JSON, sem BOM, serializado em UTF-8. É o índice de dados e de integridade; payloads de domínio são JSON, sem duplicar bytes de mídia. Assets são imutáveis e endereçados pelo hash SHA-256 dos bytes exatos. A área `preservedUnknown` dentro dos dados de domínio aceita registros opaque com tabela/path/proveniência original para retenção revisável; sua existência bloqueia a importação final até haver regra de interpretação, sem impedir que o conversor os preserve.
+`manifest.json` é UTF-8 JSON, sem BOM, serializado em UTF-8. É o índice de dados e de integridade; payloads de domínio são JSON, sem duplicar bytes de mídia. Assets são imutáveis e endereçados pelo hash SHA-256 dos bytes exatos. O schema v1 não aceita `catalogRecords` nem `preservedUnknown` não vazios: dados ainda opacos não podem ser apresentados como convertidos. O conversor deve parar e deixar a origem intacta até existir adaptador semântico testado.
 
 ## Manifesto v1
 
@@ -26,14 +26,14 @@ native-data/
     "inventorySha256": "<sha256 do inventário normalizado>"
   },
   "domains": {
-    "fabricator": { "schemaVersion": 1, "data": {} },
-    "customizer": { "schemaVersion": 1, "data": {} },
-    "studio": { "schemaVersion": 1, "data": {} },
-    "roteiros": { "schemaVersion": 1, "data": {} },
-    "baseVideos": { "schemaVersion": 1, "data": {} },
-    "editorV6": { "schemaVersion": 1, "data": {} },
-    "libraries": { "schemaVersion": 1, "data": {} },
-    "preferences": { "schemaVersion": 1, "data": {} }
+    "fabricator": { "schemaVersion": 1, "data": { "entities": [], "files": [], "catalogRecords": [], "preservedUnknown": [] } },
+    "customizer": { "schemaVersion": 1, "data": { "entities": [], "files": [], "catalogRecords": [], "preservedUnknown": [] } },
+    "studio": { "schemaVersion": 1, "data": { "projects": [], "assets": [], "prints": [], "catalogRecords": [], "preservedUnknown": [] } },
+    "roteiros": { "schemaVersion": 1, "data": { "documents": [], "characterSheets": [], "catalogRecords": [], "preservedUnknown": [] } },
+    "baseVideos": { "schemaVersion": 1, "data": { "catalog": { "videos": [], "categories": [], "sequence": null }, "catalogRecords": [], "preservedUnknown": [] } },
+    "editorV6": { "schemaVersion": 1, "data": { "projects": [], "assets": [], "prints": [], "catalogRecords": [], "preservedUnknown": [] } },
+    "libraries": { "schemaVersion": 1, "data": { "videos": [], "backgrounds": [], "editorAssets": [], "catalogRecords": [], "preservedUnknown": [] } },
+    "preferences": { "schemaVersion": 1, "data": { "editorV6Export": { "configured": false }, "catalogRecords": [], "preservedUnknown": [] } }
   },
   "assets": [{
     "id": "sha256:<64 hex minúsculos>",
@@ -46,7 +46,7 @@ native-data/
 }
 ```
 
-Os objetos `{}` são apenas forma ilustrativa; o conversor não pode emitir domínios vazios para dados não reconhecidos. `data` contém coleções tipadas por domínio e IDs estáveis. Relacionamentos entre domínios são referências explícitas por IDs, nunca dependem de índice/ordem de arquivo. Campos opcionais ausentes têm semântica definida pelo schema; valores desconhecidos não podem ser descartados silenciosamente.
+As coleções ilustram a estrutura tipada por domínio. `data` contém IDs estáveis e relações explícitas, sem depender de índice/ordem de arquivo. Campos opcionais ausentes têm semântica definida pelo schema; valores desconhecidos bloqueiam a conversão e não podem ser descartados nem carregados em um saco opaco.
 
 ## Regras de segurança e integridade
 

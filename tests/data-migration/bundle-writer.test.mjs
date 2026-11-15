@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile, rm, lstat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createVerifiedBackup, writeCanonicalBundle } from '../../scripts/data-migration/bundle-writer.mjs'
+import { createVerifiedBackup, verifyVerifiedBackup, writeCanonicalBundle } from '../../scripts/data-migration/bundle-writer.mjs'
 import { createNativeDataManifest } from '../../scripts/data-migration/format.mjs'
 import { emptyDomains, sha256 } from './helpers.mjs'
 
@@ -19,6 +19,11 @@ test('verified backup copies a synthetic source and leaves the source unchanged'
     assert.equal(await readFile(path.join(source, 'domain', 'record.json'), 'utf8'), '{"fixture":"synthetic"}')
     assert.equal(await readFile(path.join(backup, 'domain', 'record.json'), 'utf8'), '{"fixture":"synthetic"}')
     assert.equal(result.backupManifest.files[0].sha256, sha256(Buffer.from('{"fixture":"synthetic"}')))
+    const verified = await verifyVerifiedBackup(source, backup)
+    assert.equal(verified.verified, true)
+    assert.equal(verified.fileCount, 1)
+    await writeFile(path.join(backup, 'domain', 'record.json'), '{"fixture":"tampered"}')
+    await assert.rejects(verifyVerifiedBackup(source, backup), /difere|Hash/)
     await assert.rejects(createVerifiedBackup(source, backup), /já existe/)
   } finally {
     await rm(temporary, { recursive: true, force: true })

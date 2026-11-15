@@ -58,6 +58,54 @@ export async function createVerifiedBackup(sourceRoot, backupRoot) {
   }
 }
 
+/** Independently rechecks that a completed backup is a complete, current byte-for-byte copy. */
+export async function verifyVerifiedBackup(sourceRoot, backupRoot) {
+  assertDisjointRoots(sourceRoot, backupRoot)
+  const source = path.resolve(sourceRoot)
+  const backup = path.resolve(backupRoot)
+  for (const [root, label] of [[source, 'Origem'], [backup, 'Backup']]) {
+    const stats = await lstat(root)
+    if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(`${label} precisa ser uma pasta real.`)
+  }
+  const manifest = JSON.parse(await readFile(path.join(backup, 'backup-manifest.json'), 'utf8'))
+  if (manifest.format !== 'nymiprogress.legacy-backup' || manifest.formatVersion !== 1 || !Array.isArray(manifest.files)) {
+    throw new Error('Manifesto do backup inválido.')
+  }
+  const expected = new Map()
+  for (const entry of manifest.files) {
+    const relativePath = assertSafeBundleRelativePath(entry.relativePath)
+    if (expected.has(relativePath) || !/^[a-f0-9]{64}$/.test(entry.sha256) || !Number.isSafeInteger(entry.byteLength)) {
+      throw new Error('Manifesto do backup contém entrada repetida ou inválida.')
+    }
+    expected.set(relativePath, entry)
+  }
+  const [sourceFiles, backupFiles] = await Promise.all([listFiles(source), listFiles(backup)])
+  const backupPayload = backupFiles.filter((file) => file.relativePath !== 'backup-manifest.json')
+  const comparePathSet = (files, label) => {
+    if (files.length !== expected.size) throw new Error(`${label} tem quantidade de arquivos diferente do manifesto.`)
+    for (const file of files) {
+      const entry = expected.get(file.relativePath)
+      if (!entry || entry.byteLength !== file.byteLength) throw new Error(`${label} difere do manifesto em tamanho/caminho: ${file.relativePath}.`)
+    }
+  }
+  comparePathSet(sourceFiles, 'Origem atual')
+  comparePathSet(backupPayload, 'Backup')
+  for (const [relativePath, entry] of expected) {
+    const sourceBytes = await readFile(path.join(source, ...relativePath.split('/')))
+    const backupBytes = await readFile(path.join(backup, ...relativePath.split('/')))
+    const sourceHash = hash(sourceBytes)
+    if (sourceHash !== entry.sha256 || sourceHash !== hash(backupBytes)) {
+      throw new Error(`Hash da origem ou backup difere do manifesto: ${relativePath}.`)
+    }
+  }
+  return {
+    verified: true,
+    fileCount: expected.size,
+    byteLength: [...expected.values()].reduce((sum, item) => sum + item.byteLength, 0),
+    manifestSha256: hash(Buffer.from(JSON.stringify(manifest)))
+  }
+}
+
 export async function writeCanonicalBundle({ manifest, assets = [], destinationRoot, execute = false }) {
   assertNativeDataManifest(manifest)
   if (!execute) return { written: false, assetCount: manifest.assets.length, destinationRoot: path.resolve(destinationRoot) }

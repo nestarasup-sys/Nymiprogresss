@@ -138,6 +138,10 @@ function parseFile(file, targetDomain, assets) {
       record.parseError = error.message
       record.opaqueAsset = addAsset(file.bytes, 'application/json', assets)
     }
+  } else if (!ext && file.bytes.toString('utf8').trim() === 'active' && /^model-\d+\/active$/i.test(file.relativePath)) {
+    record.kind = 'active-model-selection'
+    record.modelSlot = Number(/^model-(\d+)/i.exec(file.relativePath)?.[1])
+    record.selected = true
   } else {
     record.opaqueAsset = addAsset(file.bytes, 'application/octet-stream', assets)
     record.preservedUnknown = true
@@ -188,6 +192,27 @@ export async function adaptFabricatorCustomizer({ appDataRoot, snapshotPath }) {
       if (migrated.parseError) result.blocked.push({ code: 'unparsed-json-preserved', domain: mapping.source, relativePath })
       target.files.push(migrated)
     }
+  }
+  const guidePaths = ['guides-eyes.json', 'guides-face.json', 'guides-head-extras.json', 'guides-shared.json']
+  const guideCatalog = await materializeCatalogRows(root, catalogRows(snapshotPath, 'fabricator.face-sets').rows)
+  for (const relativePath of guidePaths) {
+    let physicalBytes = null
+    try { physicalBytes = await readFile(path.join(profile, 'fabricator', relativePath)) }
+    catch (error) { if (error.code !== 'ENOENT') throw error }
+    const catalogFile = guideCatalog.find((file) => file.relativePath === relativePath || file.relativePath === `fabricator/${relativePath}`)
+    if (physicalBytes && catalogFile && !physicalBytes.equals(catalogFile.bytes)) {
+      result.blocked.push({ code: 'shadow-conflict', domain: 'fabricator.face-sets', relativePath })
+      result.conflicts.push({ domain: 'fabricator.face-sets', relativePath, filesystemSha256: hash(physicalBytes), catalogSha256: hash(catalogFile.bytes) })
+      result.domains.fabricator.files.push(parseFile({ relativePath: `conflicts/fabricator.face-sets/filesystem/${relativePath}`, bytes: physicalBytes, source: 'filesystem' }, 'fabricator', result.assets))
+      result.domains.fabricator.files.push(parseFile({ relativePath: `conflicts/fabricator.face-sets/sqlite/${relativePath}`, bytes: catalogFile.bytes, source: 'sqlite-domain-files' }, 'fabricator', result.assets))
+      continue
+    }
+    const bytes = physicalBytes ?? catalogFile?.bytes
+    if (!bytes) continue
+    let document
+    try { document = JSON.parse(bytes.toString('utf8')) }
+    catch { result.blocked.push({ code: 'invalid-guide-json', relativePath }); continue }
+    result.domains.fabricator.entities.push({ id: `guide:${relativePath}`, kind: 'guide', relativePath, document: extractEmbeddedAssets(document, result.assets), sourceCopies: physicalBytes && catalogFile ? ['filesystem', 'sqlite-domain-files'] : [physicalBytes ? 'filesystem' : 'sqlite-domain-files'] })
   }
   result.references = refs
   const availablePoseSlots = new Set(result.domains.fabricator.files.flatMap((file) => {

@@ -69,7 +69,7 @@ test('dry-run CLI writes only aggregate report and SQLite snapshot for an explic
     assert.equal(result.conversionExecuted, false)
     assert.equal(result.planStatus, 'blocked')
     assert.equal(result.modules.fabricator.status, 'ready')
-    assert.equal(result.modules.editorV6.status, 'blocked')
+    assert.equal(result.modules.sqliteCatalog.status, 'blocked')
     assert.ok((await readFile(path.join(snapshot, 'catalog.sqlite'))).length > 0)
   } finally { await rm(temporary, { recursive: true, force: true }) }
 })
@@ -110,6 +110,19 @@ test('externalizes embedded image data in SQLite JSON columns and blocks until n
     assert.equal(prepared.manifest, null)
     assert.equal(prepared.plan.modules.studio.status, 'blocked')
   } finally { await rm(temporary, { recursive: true, force: true }) }
+})
+
+test('blocks a character reference in a roteiro when its Customizer entity is absent', () => {
+  const domains = Object.fromEntries(['fabricator', 'customizer', 'studio', 'roteiros', 'baseVideos', 'editorV6', 'libraries', 'preferences'].map((name) => [name, { catalogRecords: [], preservedUnknown: [], documents: [] }]))
+  domains.roteiros.documents.push({ id: 'roteiro-fixture', characterIds: ['character-missing'] })
+  const catalog = { domains, assets: [], unknownTables: [] }
+  const fabricatorCustomizer = {
+    ready: true, conflicts: [], blocked: [], assets: [], references: [],
+    domains: { fabricator: { entities: [], files: [], preservedUnknown: [] }, customizer: { entities: [], files: [], preservedUnknown: [] } }
+  }
+  const prepared = buildPreparedMigration({ catalog, fabricatorCustomizer, inventorySha256: 'c'.repeat(64) })
+  assert.equal(prepared.plan.modules.customizer.status, 'blocked')
+  assert.ok(prepared.plan.blockers.some((blocker) => blocker.code === 'unresolved-character-references' && blocker.references === 1))
 })
 
 test('reconciles byte-identical Fabricator shadows, preserves Customizer IDs/pose links, and retains conflicts without choosing a winner', async () => {

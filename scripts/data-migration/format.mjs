@@ -20,6 +20,27 @@ function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+const DOMAIN_DATA_SCHEMAS = Object.freeze({
+  fabricator: { arrays: ['entities', 'files', 'catalogRecords', 'preservedUnknown'] },
+  customizer: { arrays: ['entities', 'files', 'catalogRecords', 'preservedUnknown'] },
+  studio: { arrays: ['projects', 'assets', 'prints', 'catalogRecords', 'preservedUnknown'] },
+  roteiros: { arrays: ['documents', 'characterSheets', 'catalogRecords', 'preservedUnknown'] },
+  baseVideos: { arrays: ['catalogRecords', 'preservedUnknown'], records: ['catalog'] },
+  editorV6: { arrays: ['projects', 'assets', 'prints', 'catalogRecords', 'preservedUnknown'] },
+  libraries: { arrays: ['videos', 'backgrounds', 'editorAssets', 'catalogRecords', 'preservedUnknown'] },
+  preferences: { arrays: ['catalogRecords', 'preservedUnknown'], records: ['editorV6Export'] }
+})
+
+function assertDomainData(domainId, data) {
+  const schema = DOMAIN_DATA_SCHEMAS[domainId]
+  const allowed = new Set([...schema.arrays, ...(schema.records ?? [])])
+  const unexpected = Object.keys(data).filter((key) => !allowed.has(key))
+  if (unexpected.length) throw new Error(`Campos fora do schema nativo v1 em ${domainId}.`)
+  for (const key of schema.arrays) if (!Array.isArray(data[key])) throw new Error(`Schema nativo v1 inválido em ${domainId}.${key}.`)
+  for (const key of schema.records ?? []) if (!isRecord(data[key])) throw new Error(`Schema nativo v1 inválido em ${domainId}.${key}.`)
+  if (data.catalogRecords.length || data.preservedUnknown.length) throw new Error(`Domínio ${domainId} contém linhas brutas ou dados não classificados; não é conversão semântica válida.`)
+}
+
 export function assertNativeDataManifest(manifest) {
   if (!isRecord(manifest)) throw new Error('O manifesto precisa ser um objeto JSON.')
   if (manifest.format !== NATIVE_DATA_FORMAT) throw new Error('Formato nativo desconhecido.')
@@ -34,10 +55,12 @@ export function assertNativeDataManifest(manifest) {
   if (JSON.stringify(domainNames) !== JSON.stringify(expectedNames)) {
     throw new Error('O manifesto precisa conter exatamente os domínios nativos versionados.')
   }
+  rejectLegacyEditorDomains(manifest.domains)
   for (const [domainId, domain] of Object.entries(manifest.domains)) {
     if (!isRecord(domain) || domain.schemaVersion !== 1 || !isRecord(domain.data)) {
       throw new Error(`Domínio inválido ou sem schemaVersion 1: ${domainId}.`)
     }
+    assertDomainData(domainId, domain.data)
   }
 
   const assetIds = new Set()
@@ -58,7 +81,6 @@ export function assertNativeDataManifest(manifest) {
       throw new Error('Referência entre entidades inválida.')
     }
   }
-  rejectLegacyEditorDomains(manifest.domains)
   return manifest
 }
 

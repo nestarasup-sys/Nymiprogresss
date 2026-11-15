@@ -6,6 +6,7 @@ import { assertDisjointRoots, scanLegacyAppData } from './inventory.mjs'
 import { snapshotSqlite } from './sqlite-snapshot.mjs'
 import { adaptSqliteCatalog } from './sqlite-catalog-adapter.mjs'
 import { adaptFabricatorCustomizer } from './fabricator-customizer-adapter.mjs'
+import { adaptStudioEditorLibrariesPreferences } from './studio-editor-libraries-adapter.mjs'
 import { buildPreparedMigration } from './conversion-pipeline.mjs'
 
 const allowed = new Set(['--dry-run', '--application-closed', '--source-app-data', '--snapshot-dir', '--report'])
@@ -78,27 +79,37 @@ const inventory = await scanLegacyAppData(source)
 const snapshotResult = await snapshotSqlite({ sourcePath: sqliteSource, destinationPath: snapshot, applicationClosed })
 const catalog = adaptSqliteCatalog(snapshotResult.snapshotPath)
 const domainAdapter = await adaptFabricatorCustomizer({ appDataRoot: source, snapshotPath: snapshotResult.snapshotPath })
+const studioEditorLibraries = await adaptStudioEditorLibrariesPreferences({ appDataRoot: source })
 const inventorySha256 = createHash('sha256').update(JSON.stringify(inventory)).digest('hex')
-const prepared = buildPreparedMigration({ catalog, fabricatorCustomizer: domainAdapter, inventorySha256 })
+const prepared = buildPreparedMigration({ catalog, fabricatorCustomizer: domainAdapter, studioEditorLibraries, inventorySha256, reviewRequired: inventory.summary.reviewRequired })
 const summary = {
   reportVersion: 1,
   mode: 'dry-run',
   conversionExecuted: false,
   snapshot: { sha256: snapshotResult.sha256, byteLength: snapshotResult.byteLength },
   inventory: { files: inventory.summary.files, bytes: inventory.summary.byteLength, reviewRequired: inventory.summary.reviewRequired },
+  unclassifiedFileCounts: Object.fromEntries(Object.entries(inventory.summary.byDomain)
+    .filter(([domain]) => domain === 'unclassified' || domain === 'electron-profile')
+    .map(([domain, summary]) => [domain, summary.files])),
   modules: prepared.plan.modules,
   counts: {
     fabricatorFiles: domainAdapter.domains.fabricator.files.length,
     fabricatorEntities: domainAdapter.domains.fabricator.entities.length,
     customizerFiles: domainAdapter.domains.customizer.files.length,
     characters: domainAdapter.domains.customizer.entities.length,
+    studioProjects: studioEditorLibraries.domains.studio.projects.length,
+    editorV6Projects: studioEditorLibraries.domains.editorV6.projects.length,
+    videos: studioEditorLibraries.domains.libraries.videos.length,
+    backgroundLibraryItems: studioEditorLibraries.domains.libraries.backgrounds.length,
+    excludedEditorDiagnosticReports: studioEditorLibraries.counts.excludedDiagnosticReports,
     shadowConflicts: domainAdapter.conflicts.length,
     sqliteUnknownTables: catalog.unknownTables.length,
     contentAssets: prepared.assets.length
   },
   blockers: {
-    codes: [...new Set(domainAdapter.blocked.map((item) => item.code))],
-    unknownSqliteTables: catalog.unknownTables.length
+    codes: [...new Set([...domainAdapter.blocked, ...studioEditorLibraries.blocked].map((item) => item.code))],
+    unknownSqliteTables: catalog.unknownTables.length,
+    plan: prepared.plan.blockers
   },
   planStatus: prepared.plan.status,
   note: 'Aggregate-only private report; no canonical bundle was written. Keep the snapshot and report outside Git.'
