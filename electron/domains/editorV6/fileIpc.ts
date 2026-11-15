@@ -1,0 +1,94 @@
+import type { IpcMain, IpcMainInvokeEvent, OpenDialogOptions, OpenDialogReturnValue } from 'electron'
+import { basename, dirname, join, resolve } from 'node:path'
+import { editorV6LibraryAssetUrl, type EditorV6Asset } from '../../../src/shared/editorV6'
+import { editorV6IpcChannels } from '../../../src/shared/editorV6IpcChannels.ts'
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024
+
+type EditorV6FileIpcDependencies = {
+  ipcMain: Pick<IpcMain, 'handle'>
+  assertTrustedSender: (event: IpcMainInvokeEvent) => void
+  showOpenDialog: (options: OpenDialogOptions) => Promise<OpenDialogReturnValue>
+  libraryPath: () => string
+  projectPath: (id: string) => string
+  resolveBackground: (id: string) => Promise<{ path: string; mimeType: string; name: string }>
+  resolveObject: (id: string) => Promise<{ path: string; mimeType: string; name: string }>
+  files: {
+    stat: (path: string) => Promise<{ size: number }>
+    readFile: (path: string) => Promise<Buffer>
+    mkdir: (path: string, options: { recursive: true }) => Promise<unknown>
+    writeFile: (path: string, data: Buffer) => Promise<unknown>
+  }
+  normalizeImage: (bytes: Buffer) => Promise<{ bytes: Buffer }>
+  dataUrlBuffer: (dataUrl: string) => Buffer
+  createId: () => string
+  openPath: (path: string) => Promise<string>
+}
+
+export function registerEditorV6FileHandlers(deps: EditorV6FileIpcDependencies): { getPendingWrites: () => Promise<unknown>[] } {
+  const pendingWrites = new Set<Promise<unknown>>()
+  const trackWrite = <T,>(operation: () => Promise<T>): Promise<T> => {
+    const pending = Promise.resolve().then(operation)
+    pendingWrites.add(pending)
+    void pending.then(() => pendingWrites.delete(pending), () => pendingWrites.delete(pending))
+    return pending
+  }
+
+  deps.ipcMain.handle(editorV6IpcChannels.getEditorV6Folder, (event): string => {
+    deps.assertTrustedSender(event)
+    return deps.libraryPath()
+  })
+  deps.ipcMain.handle(editorV6IpcChannels.importEditorV6Image, async (event, category: EditorV6Asset['category']): Promise<EditorV6Asset | null> => {
+    deps.assertTrustedSender(event)
+    if (category !== 'background' && category !== 'object') throw new Error('Categoria de imagem inválida para o Editor V6.')
+    const result = await deps.showOpenDialog({
+      title: `Editor V6: ${category === 'background' ? 'adicionar imagem de fundo' : 'adicionar objeto à cena'}`,
+      properties: ['openFile'],
+      filters: [{ name: 'Imagens', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    const path = result.filePaths[0]
+    if ((await deps.files.stat(path)).size > MAX_IMAGE_BYTES) throw new Error('A imagem excede o limite de 50 MB.')
+    const canonical = await deps.normalizeImage(await deps.files.readFile(path))
+    return { id: deps.createId(), category, name: basename(path), mimeType: 'image/png', dataUrl: `data:image/png;base64,${canonical.bytes.toString('base64')}` }
+  })
+  deps.ipcMain.handle(editorV6IpcChannels.linkEditorV6LibraryBackground, async (event, projectId: string, id: string): Promise<EditorV6Asset> => {
+    deps.assertTrustedSender(event)
+    if (typeof projectId !== 'string' || !UUID_V4.test(projectId) || typeof id !== 'string' || !UUID_V4.test(id)) throw new Error('Identificador de fundo inválido.')
+    const background = await deps.resolveBackground(id)
+    return { id, category: 'background', name: background.name, mimeType: background.mimeType as EditorV6Asset['mimeType'], dataUrl: editorV6LibraryAssetUrl(projectId, id), libraryAssetId: id }
+  })
+  deps.ipcMain.handle(editorV6IpcChannels.linkEditorV6LibraryAsset, async (event, projectId: string, rawCategory: unknown, id: string): Promise<EditorV6Asset> => {
+    deps.assertTrustedSender(event)
+    if (typeof projectId !== 'string' || !UUID_V4.test(projectId) || rawCategory !== 'object' || typeof id !== 'string' || !UUID_V4.test(id)) throw new Error('Identificador de objeto inválido.')
+    const asset = await deps.resolveObject(id)
+    return { id, category: 'object', name: asset.name, mimeType: asset.mimeType as EditorV6Asset['mimeType'], dataUrl: editorV6LibraryAssetUrl(projectId, id), libraryAssetId: id }
+  })
+  deps.ipcMain.handle(editorV6IpcChannels.saveEditorV6Print, async (event, id: string, dataUrl: string): Promise<string | null> => {
+    deps.assertTrustedSender(event)
+    if (typeof id !== 'string' || !UUID_V4.test(id)) throw new Error('Identificador de projeto V6 inválido.')
+    return trackWrite(async () => {
+      const bytes = deps.dataUrlBuffer(dataUrl)
+      if (bytes.length > MAX_IMAGE_BYTES) throw new Error('O print excede o limite de 50 MB.')
+      const printsFolder = join(deps.projectPath(id), 'prints')
+      await deps.files.mkdir(printsFolder, { recursive: true })
+      const printPath = join(printsFolder, `print-${new Date().toISOString().replace(/[:.]/g, '-')}-${deps.createId().slice(0, 8)}.png`)
+      await deps.files.writeFile(printPath, bytes)
+      return printPath
+    })
+  })
+  deps.ipcMain.handle(editorV6IpcChannels.openEditorV6Prints, async (event, id: string): Promise<void> => {
+    deps.assertTrustedSender(event)
+    if (typeof id !== 'string' || !UUID_V4.test(id)) throw new Error('Identificador de projeto V6 inválido.')
+    return trackWrite(async () => {
+      const projectFolder = resolve(deps.projectPath(id))
+      const printsFolder = resolve(projectFolder, 'prints')
+      if (dirname(printsFolder) !== projectFolder) throw new Error('Pasta de prints do Editor V6 inválida.')
+      await deps.files.mkdir(printsFolder, { recursive: true })
+      const error = await deps.openPath(printsFolder)
+      if (error) throw new Error(`Não foi possível abrir a pasta de prints do Editor V6: ${error}`)
+    })
+  })
+  return { getPendingWrites: () => [...pendingWrites] }
+}

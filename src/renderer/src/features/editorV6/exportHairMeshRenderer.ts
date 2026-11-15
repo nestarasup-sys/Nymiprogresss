@@ -1,0 +1,204 @@
+import { fillHairMotionMeshPositions, HAIR_MOTION_MESH_COLUMNS, HAIR_MOTION_MESH_HEIGHT, HAIR_MOTION_MESH_ROWS, HAIR_MOTION_MESH_WIDTH } from '../../characters/hairMotionMeshGeometry'
+import type { HairMotionSettings, HairMotionState } from '../../../../shared/hairMotionEngine'
+
+type Resources = {
+  canvas: HTMLCanvasElement
+  gl: WebGLRenderingContext
+  program: WebGLProgram
+  positionBuffer: WebGLBuffer
+  uvBuffer: WebGLBuffer
+  indexBuffer: WebGLBuffer
+  positions: Float32Array
+  indices: number
+  textures: WeakMap<ImageBitmap, WebGLTexture>
+  allocatedTextures: WebGLTexture[]
+  maxTextureSize: number
+  maxViewportWidth: number
+  maxViewportHeight: number
+  positionMs: number
+  uploadMs: number
+  textureUploadMs: number
+  drawMs: number
+  contextCheckMs: number
+  stateSetupMs: number
+  viewportWidth: number
+  viewportHeight: number
+  boundTexture: WebGLTexture | null
+  lost: boolean
+}
+
+function compileShader(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
+  const shader = gl.createShader(type)
+  if (!shader) throw Error('Não foi possível criar a malha de cabelo para exportação.')
+  gl.shaderSource(shader, source)
+  gl.compileShader(shader)
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const details = gl.getShaderInfoLog(shader)
+    gl.deleteShader(shader)
+    throw Error(`Não foi possível compilar a malha de cabelo para exportação${details ? `: ${details}` : '.'}`)
+  }
+  return shader
+}
+
+function createResources(): Resources {
+  const canvas = document.createElement('canvas')
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: true, preserveDrawingBuffer: true })
+  if (!gl) throw Error('A animação de cabelo precisa de WebGL no renderizador de exportação.')
+  const vertex = compileShader(gl, gl.VERTEX_SHADER, 'attribute vec2 position; attribute vec2 uv; varying vec2 tex; void main(){ gl_Position=vec4(position,0.0,1.0); tex=uv; }')
+  const fragment = compileShader(gl, gl.FRAGMENT_SHADER, 'precision mediump float; varying vec2 tex; uniform sampler2D image; void main(){ gl_FragColor=texture2D(image,tex); }')
+  const program = gl.createProgram()
+  if (!program) throw Error('Não foi possível criar o programa da malha de cabelo para exportação.')
+  gl.attachShader(program, vertex)
+  gl.attachShader(program, fragment)
+  gl.linkProgram(program)
+  gl.deleteShader(vertex)
+  gl.deleteShader(fragment)
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw Error('Não foi possível vincular o programa da malha de cabelo para exportação.')
+  gl.useProgram(program)
+
+  const columns = HAIR_MOTION_MESH_COLUMNS, rows = HAIR_MOTION_MESH_ROWS, vertexCount = (columns + 1) * (rows + 1)
+  const uvs = new Float32Array(vertexCount * 2), indices: number[] = []
+  for (let row = 0; row <= rows; row += 1) for (let column = 0; column <= columns; column += 1) {
+    const index = row * (columns + 1) + column
+    uvs[index * 2] = column / columns
+    // ImageBitmap uploads ignore UNPACK_FLIP_Y_WEBGL. Its first source row is
+    // the image's visual top, so WebGL's bottom-left texture origin needs the
+    // top mesh row to sample v=0 rather than v=1.
+    uvs[index * 2 + 1] = row / rows
+    if (row < rows && column < columns) {
+      const next = index + columns + 1
+      indices.push(index, next, index + 1, index + 1, next, next + 1)
+    }
+  }
+  const positionBuffer = gl.createBuffer(), uvBuffer = gl.createBuffer(), indexBuffer = gl.createBuffer()
+  if (!positionBuffer || !uvBuffer || !indexBuffer) throw Error('Não foi possível alocar os recursos da malha de cabelo para exportação.')
+  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer)
+  gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW)
+  const uvLocation = gl.getAttribLocation(program, 'uv')
+  gl.enableVertexAttribArray(uvLocation)
+  gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, 0, 0)
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer)
+  const positions = new Float32Array(vertexCount * 2)
+  gl.bufferData(gl.ARRAY_BUFFER, positions.byteLength, gl.DYNAMIC_DRAW)
+  const positionLocation = gl.getAttribLocation(program, 'position')
+  gl.enableVertexAttribArray(positionLocation)
+  gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0)
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer)
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW)
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0)
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1)
+  gl.disable(gl.BLEND)
+  gl.disable(gl.DEPTH_TEST)
+  gl.disable(gl.CULL_FACE)
+  gl.enable(gl.SCISSOR_TEST)
+  gl.clearColor(0, 0, 0, 0)
+  // GPU capability queries can synchronize with the driver. They do not
+  // change during this context's lifetime; query once, not on each strand/frame.
+  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number
+  const maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array
+  const maxViewportWidth = maxViewport[0], maxViewportHeight = maxViewport[1]
+  let lost = false
+  canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); lost = true })
+  return { canvas, gl, program, positionBuffer, uvBuffer, indexBuffer, positions, indices: indices.length, textures: new WeakMap(), allocatedTextures: [], maxTextureSize, maxViewportWidth, maxViewportHeight, positionMs: 0, uploadMs: 0, textureUploadMs: 0, drawMs: 0, contextCheckMs: 0, stateSetupMs: 0, viewportWidth: canvas.width, viewportHeight: canvas.height, boundTexture: null, get lost() { return lost }, set lost(value: boolean) { lost = value } }
+}
+
+/** One reusable WebGL context per export worker eliminates seams between raster strips. */
+export function createExportHairMeshRenderer() {
+  let resources: Resources | undefined
+
+  const render = (image: ImageBitmap, state: HairMotionState, settings: HairMotionSettings, intensity: number, phase: number): HTMLCanvasElement => {
+    resources ??= createResources()
+    const { canvas, gl } = resources
+    const contextCheckStarted = performance.now()
+    const contextLostBeforeDraw = resources.lost || gl.isContextLost()
+    resources.contextCheckMs += performance.now() - contextCheckStarted
+    if (contextLostBeforeDraw) throw Error('A aceleração gráfica foi interrompida durante a animação de cabelo; a exportação não foi publicada.')
+    const stateSetupStarted = performance.now()
+    const width = image.width, height = image.height
+    const outputWidth = Math.max(1, Math.ceil(width * HAIR_MOTION_MESH_WIDTH)), outputHeight = Math.max(1, Math.ceil(height * HAIR_MOTION_MESH_HEIGHT))
+    if (width > resources.maxTextureSize || height > resources.maxTextureSize
+      || outputWidth > resources.maxViewportWidth || outputHeight > resources.maxViewportHeight) {
+      throw Error(`A camada de cabelo (${width} × ${height}px) excede a capacidade gráfica disponível para manter a resolução original.`)
+    }
+    // The same worker context renders many hair textures with different
+    // dimensions. Keep a grow-only drawing buffer so switching pieces does
+    // not reallocate the GPU canvas on every frame.
+    const canvasWidth = Math.max(canvas.width, outputWidth)
+    const canvasHeight = Math.max(canvas.height, outputHeight)
+    const resized = canvas.width !== canvasWidth || canvas.height !== canvasHeight
+    if (resized) {
+      canvas.width = canvasWidth
+      canvas.height = canvasHeight
+    }
+    if (resized || resources.viewportWidth !== outputWidth || resources.viewportHeight !== outputHeight) {
+      gl.viewport(0, 0, outputWidth, outputHeight)
+      gl.scissor(0, 0, outputWidth, outputHeight)
+      resources.viewportWidth = outputWidth
+      resources.viewportHeight = outputHeight
+    }
+    // This context belongs exclusively to this export worker. Program and
+    // buffer bindings stay valid across draws, so reassert them only in the
+    // one-time resource setup above instead of sending redundant GL commands.
+    resources.stateSetupMs += performance.now() - stateSetupStarted
+    const positionStarted = performance.now()
+    fillHairMotionMeshPositions(resources.positions, state, settings, intensity, phase)
+    resources.positionMs += performance.now() - positionStarted
+    const uploadStarted = performance.now()
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, resources.positions)
+    resources.uploadMs += performance.now() - uploadStarted
+    const textureSetupStarted = performance.now()
+    let texture = resources.textures.get(image)
+    if (!texture) {
+      texture = gl.createTexture() ?? undefined
+      if (!texture) throw Error('Não foi possível alocar a textura de cabelo para exportação.')
+      resources.textures.set(image, texture)
+      resources.allocatedTextures.push(texture)
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      resources.boundTexture = texture
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      resources.stateSetupMs += performance.now() - textureSetupStarted
+      const textureUploadStarted = performance.now()
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
+      resources.textureUploadMs += performance.now() - textureUploadStarted
+      const uploadError = gl.getError()
+      resources.stateSetupMs += textureUploadStarted - textureSetupStarted
+      if (uploadError !== gl.NO_ERROR) throw Error('Não foi possível enviar a camada original de cabelo à GPU.')
+    } else {
+      if (resources.boundTexture !== texture) {
+        gl.bindTexture(gl.TEXTURE_2D, texture)
+        resources.boundTexture = texture
+      }
+      resources.stateSetupMs += performance.now() - textureSetupStarted
+    }
+    const drawStarted = performance.now()
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.drawElements(gl.TRIANGLES, resources.indices, gl.UNSIGNED_SHORT, 0)
+    resources.drawMs += performance.now() - drawStarted
+    const contextCheckAfterDrawStarted = performance.now()
+    const contextLostAfterDraw = gl.isContextLost()
+    resources.contextCheckMs += performance.now() - contextCheckAfterDrawStarted
+    if (contextLostAfterDraw) throw Error('A aceleração gráfica foi interrompida durante a animação de cabelo; a exportação não foi publicada.')
+    return canvas
+  }
+
+  const dispose = () => {
+    if (!resources) return
+    const { gl } = resources
+    if (!gl.isContextLost()) {
+      for (const texture of resources.allocatedTextures) gl.deleteTexture(texture)
+      gl.deleteBuffer(resources.positionBuffer)
+      gl.deleteBuffer(resources.uvBuffer)
+      gl.deleteBuffer(resources.indexBuffer)
+      gl.deleteProgram(resources.program)
+    }
+    resources.canvas.width = resources.canvas.height = 1
+    resources = undefined
+  }
+
+  const getTimings = () => resources ? { positionMs: resources.positionMs, uploadMs: resources.uploadMs, textureUploadMs: resources.textureUploadMs, drawMs: resources.drawMs, contextCheckMs: resources.contextCheckMs, stateSetupMs: resources.stateSetupMs } : { positionMs: 0, uploadMs: 0, textureUploadMs: 0, drawMs: 0, contextCheckMs: 0, stateSetupMs: 0 }
+
+  return { render, getTimings, dispose }
+}

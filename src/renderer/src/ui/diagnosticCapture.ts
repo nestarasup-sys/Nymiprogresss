@@ -1,0 +1,44 @@
+import { sanitizeDiagnosticRoute } from '../../../shared/applicationRoutes.ts'
+
+type DiagnosticSeverity = 'error' | 'warning' | 'info'
+
+function currentSafeRoute(): string {
+  const hashRoute = window.location.hash.startsWith('#/') ? window.location.hash.slice(1).split(/[?#]/, 1)[0] : ''
+  const path = hashRoute || window.location.pathname.split(/[?#]/, 1)[0]
+  return sanitizeDiagnosticRoute(path) ?? '(outra rota)'
+}
+
+function messageOf(reason: unknown): string {
+  if (reason instanceof Error) return `${reason.name}: ${reason.message}`
+  if (typeof reason === 'string') return reason
+  return 'O aplicativo recebeu uma falha sem mensagem textual.'
+}
+
+export function recordLocalRendererDiagnostic(code: string, reason: unknown, severity: DiagnosticSeverity = 'error'): void {
+  try {
+    void window.desktop.dataManagement.recordLocalDiagnosticEvent({
+      severity,
+      code,
+      route: currentSafeRoute(),
+      domain: 'ui',
+      operation: 'renderer.diagnostic-capture',
+      stage: 'global-handler',
+      message: messageOf(reason)
+    }).catch(() => undefined)
+  } catch { /* Logging must never interfere with the app's error recovery. */ }
+}
+
+export function installRendererDiagnosticCapture(): () => void {
+  const onError = (event: ErrorEvent) => {
+    recordLocalRendererDiagnostic('renderer.uncaught-error', event.error ?? event.message ?? 'Erro não identificado.')
+  }
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    recordLocalRendererDiagnostic('renderer.unhandled-rejection', event.reason)
+  }
+  window.addEventListener('error', onError)
+  window.addEventListener('unhandledrejection', onUnhandledRejection)
+  return () => {
+    window.removeEventListener('error', onError)
+    window.removeEventListener('unhandledrejection', onUnhandledRejection)
+  }
+}

@@ -1,0 +1,82 @@
+# Native Gacha — G-V5
+
+Aplicativo desktop de criação de personagens, customização e composição de cenas, feito com **Electron + React + TypeScript**. Este repositório registra uma **refatoração incremental** do aplicativo que já funciona, preservando formatos de arquivos e contratos IPC.
+
+> **Estado atual: em reorganização arquitetural.** O Video Studio e seu motor de edição e exportação foram removidos do aplicativo. As bibliotecas de vídeos e fundos continuam disponíveis em Base de vídeos e Roteiros, que dependem desses arquivos compartilhados.
+
+## Fluxo principal do produto
+
+```text
+Fabricador DEV ── bibliotecas (poses, peças, cabelo, rosto, modelos) ──► Customizador
+                                                                          │
+                                                                          ▼
+                                                          Personagem com ajustes individuais
+                                                                          │
+                                                                          ▼
+                                                                    Studio principal
+```
+
+O **Fabricador DEV** é o autor das bibliotecas. O **Customizador** seleciona e ajusta componentes por personagem. O **Studio** consome os personagens resultantes. Os módulos não devem editar o acervo de origem do outro módulo.
+
+## Ambiente
+
+- **Node.js 22.22.0 ou superior** (veja `.nvmrc` / `package.json`; exigência de `react-router@8.4.0`).
+- npm (a versão e o lockfile precisam permanecer consistentes).
+- Windows recomendado para validação completa do desktop e integração nativa.
+
+```bash
+npm ci
+npm run audit:architecture
+npm run test:refactor
+npm run typecheck
+npm run build
+npm run dev
+```
+
+> Algumas dependências são nativas e `postinstall` instala Electron; o setup completo deve ser executado no ambiente de desenvolvimento. Os testes de arquitetura e refatoração podem ser executados sem iniciar o desktop.
+
+## Branch oficial e atalhos de desenvolvimento (Windows)
+
+A branch de trabalho do Native Gacha é **`Main-desenvolvimento`** (respeite maiúsculas/minúsculas); `main` não é atualizada automaticamente.
+
+- **`ATUALIZAR_DESENVOLVIMENTO.bat`**: verifica o clone `origin`, recusa alterações locais não salvas, faz fetch da branch oficial, seleciona `Main-desenvolvimento`, configura o upstream e faz `git pull --ff-only`. Não executa `reset --hard`, `clean` ou rebase.
+- **`ABRIR_DESENVOLVIMENTO.bat`**: inicia o Electron no Windows sem chamar o `predev` que migra dados do perfil G-V5 legado.
+
+**Primeira atualização em clones antigos:** se o BAT *já presente no computador* ainda cita `feature/model-source-editor`, o usuário precisa primeiro trocar para a branch nova pelo Git ou copiar a versão atualizada do BAT do GitHub. O script antigo não muda sozinho antes de ser atualizado. Com a pasta limpa:
+
+```bash
+git fetch origin Main-desenvolvimento
+git switch --track -c Main-desenvolvimento origin/Main-desenvolvimento
+```
+
+Se a branch local `Main-desenvolvimento` já existir, use `git switch Main-desenvolvimento` no lugar do segundo comando, seguido de `git pull --ff-only origin Main-desenvolvimento`.
+
+
+## Estrutura existente (sem mudança agressiva de diretórios)
+
+- `electron/`: processo principal, preload seguro, serviços de arquivos e SQLite.
+- `src/renderer/src/features/`: interfaces e fluxos dos módulos.
+- `src/shared/`: regras compartilhadas sem dependência de páginas do React.
+- `tests/`: contratos, migrações e testes de regressão.
+- `scripts/architecture/`: auditorias de sintaxe, resolução de imports e limites de dependências.
+- `docs/architecture/`: decisões e evidências das duas primeiras rodadas de refatoração.
+
+A estrutura final deve evoluir **por domínio** e não por movimentação massiva de pastas. Preserve os caminhos antigos por reexports temporários quando necessário.
+
+## Documentação útil
+
+- [ADR 001 — Electron modular](docs/architecture/ADR-001-modular-electron.md)
+- [ADR 002 — fluxo de personagens](docs/architecture/ADR-002-fluxo-personagens.md)
+- [Relatório da evolução 22/10/2026](docs/architecture/RELATORIO_EVOLUCAO_2026-10-22.md)
+- [Índice do Editor V6 e Zona de Guerra](docs/editor-v6/README.md)
+- [Painel de pendências R32–R37](docs/editor-v6/ZONA_GUERRA_PENDENCIAS.md)
+- [Bancada remota Windows para renderização e MP4](docs/editor-v6/ZONA_GUERRA_BANCADA_WINDOWS_REMOTA.md)
+- [README histórico, com referências legadas](docs/architecture/README_LEGADO_2026-10-22.md)
+
+## Branch experimental de renderização (Zona de Guerra)
+
+A branch `dev-v2-zona-de-guerra` concentra os experimentos de renderização e exportação Editor V6; **não é a branch de atualização dos BATs de desenvolvimento**. A `Dev-V2` é a base estável de comparação deste experimento e não recebe automaticamente mudanças desta branch. Para conferir o que ainda não está completo, use o [painel de pendências](docs/editor-v6/ZONA_GUERRA_PENDENCIAS.md). A bancada Windows do GitHub usa fixtures sintéticas e não equivale a um benchmark no Windows 11 local.
+
+## Segurança e publicação
+
+O repositório GitHub é **público**. Não versionar projetos pessoais, personagens privados, perfis reais, chaves, tokens, vídeos privados nem bases SQLite de trabalho. A CI opera apenas com testes/fixtures sintéticas. Para mudanças estruturais, use branches curtas e pull requests com auditorias aprovadas.

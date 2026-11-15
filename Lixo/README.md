@@ -1,3 +1,3 @@
-# Lixo — documentos históricos não confiáveis
+# Lixo — arquivo histórico não confiável
 
-A documentação anterior será deslocada para esta pasta na importação da fonte completa. Ela não é especificação atual: muitas informações foram relatadas como desatualizadas. Os workflows antigos também são arquivados para impedir execuções inadvertidas. A documentação específica da versão experimental descartada do editor não será mantida.
+Os documentos desta pasta foram retirados do fluxo principal e preservados apenas como registros históricos. Não utilizar para decidir contratos, funcionalidades ou status sem verificar o código e testes atuais. Workflows antigos foram desativados e arquivados separadamente. Arquivos de documentação dedicados à versão experimental descartada do editor foram removidos.

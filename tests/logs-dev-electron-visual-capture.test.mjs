@@ -1,0 +1,32 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+
+test('captura visual da Logs Dev exige o sandbox DEV AI e opera somente no perfil sintético', async () => {
+  const main = await readFile(new URL('../electron/main.ts', import.meta.url), 'utf8')
+  const runner = await readFile(new URL('../scripts/logs-dev/capture-real-ui.cjs', import.meta.url), 'utf8')
+  const capture = await readFile(new URL('../electron/domains/storage/logsDevVisualCapture.ts', import.meta.url), 'utf8')
+  const routeModel = await readFile(new URL('../electron/domains/storage/routePerformanceModel.ts', import.meta.url), 'utf8')
+  assert.match(main, /GACHA_DEV_AI_TEST === '1' && process\.env\.GACHA_LOGS_DEV_REAL_UI_CAPTURE === '1'/)
+  assert.match(runner, /GACHA_DEV_AI_SANDBOX: sandbox/)
+  assert.match(runner, /\.dev-ai-sandbox\.json/)
+  assert.match(runner, /GACHA_DEV_AI_TEST: '1'/)
+  assert.match(main, /join\(app\.getPath\('appData'\), 'logs-dev-captures'\)/)
+  assert.match(capture, /captureLogsDevRealScreens/)
+  assert.match(capture, /captureRoutePerformance\(win, outputDirectory, startup\)/)
+  assert.match(capture, /captureInitialStartup\(win\)/)
+  assert.match(capture, /PerformanceObserver\.supportedEntryTypes/)
+  assert.match(capture, /characterData: true/)
+  assert.match(capture, /setIpcPerformanceCollection\(true\)/)
+  assert.match(capture, /getEntriesByType\('resource'\)/)
+  assert.match(capture, /route-performance\.json/)
+  assert.match(runner, /GACHA_LOGS_DEV_CAPTURE_LAUNCH_STARTED_AT_MS/)
+  assert.match(runner, /GV5_IPC_PERF: '1'/)
+  assert.match(runner, /startup\.ipcPerformance\.rows/)
+  assert.match(runner, /item\.failures > 0/)
+  assert.match(runner, /Error occurred in handler for/)
+  assert.match(capture, /getIpcPerformanceSnapshot\(\)/)
+  assert.match(routeModel, /APPLICATION_ROUTES\.editorV6/)
+  assert.match(routeModel, /APPLICATION_ROUTES\.baseVideos/)
+  assert.doesNotMatch(runner, /app-data|userData|private-copy/)
+})

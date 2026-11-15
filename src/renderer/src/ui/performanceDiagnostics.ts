@@ -1,0 +1,173 @@
+import { UI_PERFORMANCE_ROUTES } from '../../../shared/applicationRoutes.ts'
+
+/** Opt-in aggregate diagnostics: no user/project names, asset paths or content. */
+type RouteStats = { commits:number; commitMs:number; worstCommitMs:number; longTasks:number; longTaskMs:number; commitSamples:Array<{phase:string;actualDuration:number;baseDuration:number;startTime:number;commitTime:number}>; longTaskSamples:Array<{startTime:number;duration:number}>; sceneResolveSamples:Array<{at:number;durationMs:number;elementCount:number}> }
+type PlaybackSample = { frame:number; at:number; publishMs:number }
+type PlaybackGap = { from:number; to:number; skipped:number }
+const PLAYBACK_DIAGNOSTIC_SAMPLE_LIMIT = 5000
+const routes = UI_PERFORMANCE_ROUTES
+const stats = new Map<string, RouteStats>()
+const enabled = (() => { try { return typeof window !== 'undefined' && sessionStorage.getItem('gv5:perf') === '1' } catch { return false } })()
+let logicalFrameSamples: PlaybackSample[] = []
+let playbackSampleWriteIndex = 0
+let logicalFrameGaps: PlaybackGap[] = []
+let playbackGapWriteIndex = 0
+let playbackUpdateCount = 0
+let playbackGapCount = 0
+let firstPlaybackFrame: number | null = null
+let lastPlaybackFrame: number | null = null
+let playbackPublishTotalMs = 0
+let playbackPublishWorstMs = 0
+function traceCaptureEnabled():boolean {
+  return typeof window !== 'undefined' && Boolean((window as Window & { __editorV6TraceCapture?: boolean }).__editorV6TraceCapture)
+}
+function currentRoute(): string {
+  const hashRoute = window.location.hash.startsWith('#/') ? window.location.hash.slice(1).split('?')[0] : ''
+  return hashRoute || window.location.pathname
+}
+function entryFor(route: string): RouteStats {
+  const key = routes.has(route) ? route : '(outra rota)'
+  const existing = stats.get(key)
+  if (existing) return existing
+  const created = { commits:0, commitMs:0, worstCommitMs:0, longTasks:0, longTaskMs:0, commitSamples:[], longTaskSamples:[], sceneResolveSamples:[] }
+  stats.set(key, created)
+  return created
+}
+export function snapshotUiPerformance() {
+  return [...stats].map(([route,s]) => ({
+    route, commits:s.commits,
+    meanCommitMs:s.commits ? +(s.commitMs / s.commits).toFixed(2) : 0,
+    worstCommitMs:+s.worstCommitMs.toFixed(2),
+    p95CommitMs:+percentile(s.commitSamples.map(sample=>sample.actualDuration),.95).toFixed(2),
+    longTasks:s.longTasks, longTaskMs:+s.longTaskMs.toFixed(2),
+    commitSamples:s.commitSamples,
+    longTaskSamples:s.longTaskSamples,
+    ...(route === '/editor-v6/scene' ? { sceneResolution: { ...summarizeSceneResolution(s.sceneResolveSamples), samples:s.sceneResolveSamples } } : {}),
+    ...(route === '/editor-v6' ? { playback: snapshotPlaybackPerformance() } : {})
+  }))
+}
+function percentile(values:number[], p:number):number {
+  const sorted = [...values].sort((left,right)=>left-right)
+  return sorted.length ? sorted[Math.min(sorted.length-1,Math.floor((sorted.length-1)*p))] : 0
+}
+function summarizeSceneResolution(samples:RouteStats['sceneResolveSamples']) {
+  const durations = samples.map(sample=>sample.durationMs)
+  return { samples:samples.length, meanMs:samples.length ? +(durations.reduce((sum,value)=>sum+value,0)/samples.length).toFixed(3) : 0,
+    p50Ms:+percentile(durations,.5).toFixed(3),p95Ms:+percentile(durations,.95).toFixed(3),p99Ms:+percentile(durations,.99).toFixed(3),
+    worstMs:+Math.max(0,...durations).toFixed(3),maxElements:Math.max(0,...samples.map(sample=>sample.elementCount)) }
+}
+function appendBounded<T>(items:T[], item:T, nextWriteIndex:number):number {
+  if (items.length < PLAYBACK_DIAGNOSTIC_SAMPLE_LIMIT) {
+    items.push(item)
+    return nextWriteIndex
+  }
+  items[nextWriteIndex] = item
+  return (nextWriteIndex + 1) % PLAYBACK_DIAGNOSTIC_SAMPLE_LIMIT
+}
+function orderedSamples<T>(items:T[], nextWriteIndex:number):T[] {
+  if (items.length < PLAYBACK_DIAGNOSTIC_SAMPLE_LIMIT || nextWriteIndex === 0) return items.slice()
+  return [...items.slice(nextWriteIndex), ...items.slice(0, nextWriteIndex)]
+}
+function snapshotPlaybackPerformance() {
+  const frames = orderedSamples(logicalFrameSamples, playbackSampleWriteIndex)
+  return {
+    logicalFrameUpdates: playbackUpdateCount,
+    firstLogicalFrame: firstPlaybackFrame,
+    lastLogicalFrame: lastPlaybackFrame,
+    logicalFrameGaps: orderedSamples(logicalFrameGaps, playbackGapWriteIndex),
+    logicalFrameGapCount: playbackGapCount,
+    publishTotalMs: +playbackPublishTotalMs.toFixed(2),
+    publishWorstMs: +playbackPublishWorstMs.toFixed(2),
+    samplesRetained: frames.length,
+    samplesDropped: playbackUpdateCount - frames.length,
+    samples: frames
+  }
+}
+export function resetUiPerformance(): void {
+  stats.clear()
+  logicalFrameSamples = []
+  playbackSampleWriteIndex = 0
+  logicalFrameGaps = []
+  playbackGapWriteIndex = 0
+  playbackUpdateCount = 0
+  playbackGapCount = 0
+  firstPlaybackFrame = null
+  lastPlaybackFrame = null
+  playbackPublishTotalMs = 0
+  playbackPublishWorstMs = 0
+}
+/** Captures the playback clock's requested logical frame and synchronous publication cost. */
+export function recordEditorV6PlaybackFrame(frame:number, at:number, publishMs:number):void {
+  if (!enabled || !Number.isFinite(frame) || !Number.isFinite(at) || !Number.isFinite(publishMs)) return
+  if (lastPlaybackFrame !== null && frame > lastPlaybackFrame + 1) {
+    playbackGapCount += 1
+    playbackGapWriteIndex = appendBounded(logicalFrameGaps, { from:lastPlaybackFrame, to:frame, skipped:frame - lastPlaybackFrame - 1 }, playbackGapWriteIndex)
+  }
+  if (firstPlaybackFrame === null) firstPlaybackFrame = frame
+  lastPlaybackFrame = frame
+  const roundedPublishMs = +publishMs.toFixed(3)
+  playbackPublishTotalMs += roundedPublishMs
+  playbackPublishWorstMs = Math.max(playbackPublishWorstMs, roundedPublishMs)
+  playbackSampleWriteIndex = appendBounded(logicalFrameSamples, { frame, at:+at.toFixed(2), publishMs:roundedPublishMs }, playbackSampleWriteIndex)
+  playbackUpdateCount += 1
+  if (traceCaptureEnabled()) performance.mark('editor-v6:playback-publish', { detail:{ frame, publishMs:+publishMs.toFixed(3), rafAt:+at.toFixed(3) } })
+}
+/** Measures deterministic timeline-to-scene composition independently from React/Chromium drawing. */
+export function measureEditorV6SceneResolution<T extends { elements: readonly unknown[] }>(resolve:()=>T):T {
+  if (!enabled) return resolve()
+  const started = performance.now()
+  if (traceCaptureEnabled()) performance.mark('editor-v6:scene-resolve:start')
+  const scene = resolve()
+  const ended = performance.now()
+  if (traceCaptureEnabled()) {
+    performance.mark('editor-v6:scene-resolve:end')
+    performance.measure('editor-v6:scene-resolve', 'editor-v6:scene-resolve:start', 'editor-v6:scene-resolve:end')
+  }
+  const samples = entryFor('/editor-v6/scene').sceneResolveSamples
+  if (samples.length < 5000) samples.push({ at:+ended.toFixed(3), durationMs:+(ended-started).toFixed(3), elementCount:scene.elements.length })
+  if (traceCaptureEnabled()) {
+    performance.clearMarks('editor-v6:scene-resolve:start')
+    performance.clearMarks('editor-v6:scene-resolve:end')
+    performance.clearMeasures('editor-v6:scene-resolve')
+  }
+  return scene
+}
+export function recordUiCommit(route:string, phase:string, duration:number, baseDuration:number, startTime:number, commitTime:number):void {
+  if (!enabled || !Number.isFinite(duration) || duration < 0) return
+  const s = entryFor(route)
+  s.commits++
+  s.commitMs += duration
+  s.worstCommitMs = Math.max(s.worstCommitMs, duration)
+  if (s.commitSamples.length < 5000) s.commitSamples.push({ phase, actualDuration:+duration.toFixed(3), baseDuration:+baseDuration.toFixed(3), startTime:+startTime.toFixed(2), commitTime:+commitTime.toFixed(2) })
+  if (traceCaptureEnabled()) performance.mark('editor-v6:react-commit', { detail:{ route, phase, actualDuration:+duration.toFixed(3), baseDuration:+baseDuration.toFixed(3), startTime:+startTime.toFixed(3), commitTime:+commitTime.toFixed(3) } })
+}
+/** React Profiler measures commit/render work; Chromium longtasks approximate main-thread blocking. */
+export function installUiPerformanceDiagnostics(): () => void {
+  if (!enabled || typeof window === 'undefined') return () => undefined
+  let observer: PerformanceObserver | undefined
+  if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+    observer = new PerformanceObserver(list => {
+      for (const task of list.getEntries()) {
+        const s = entryFor(currentRoute())
+        s.longTasks++
+        s.longTaskMs += task.duration
+        if (s.longTaskSamples.length < 2000) s.longTaskSamples.push({ startTime:+task.startTime.toFixed(2), duration:+task.duration.toFixed(2) })
+      }
+    })
+    observer.observe({ entryTypes: ['longtask'] })
+  }
+  const diagnosticWindow = window as Window & {
+    __gv5PerformanceReport?: () => ReturnType<typeof snapshotUiPerformance>
+    __gv5PerformanceReset?: () => void
+  }
+  diagnosticWindow.__gv5PerformanceReport = snapshotUiPerformance
+  diagnosticWindow.__gv5PerformanceReset = resetUiPerformance
+  const print = () => console.table(snapshotUiPerformance())
+  window.addEventListener('pagehide', print)
+  return () => {
+    observer?.disconnect()
+    window.removeEventListener('pagehide', print)
+    delete diagnosticWindow.__gv5PerformanceReport
+    delete diagnosticWindow.__gv5PerformanceReset
+  }
+}

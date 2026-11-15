@@ -1,0 +1,145 @@
+/** Casos de uso independentes de Electron. Todas as gravações compartilham uma fila. */
+import {
+  characterProportionLimits,
+  defaultCharacterProportions,
+  type CustomizerCharacter,
+  type CustomizerWardrobeGroup
+} from '../../../src/shared/customizer.ts'
+import { collectCustomizerHairStyleReferences } from '../../../src/shared/hairCategories.ts'
+import { collectCustomizerFaceAssetReferences, customizerFaceAssetReferenceKey, type CustomizerFaceAssetReference } from '../../../src/shared/customizerFaceAssetReferences.ts'
+import { addedFabricatorPoseReferences, collectCustomizerPoseReferences, type FabricatorPoseReference } from '../../../src/shared/fabricatorPoseReferences.ts'
+import type { CustomizerCharacterRepository } from './repository.ts'
+import { isCustomizerCharacter } from './validation.ts'
+
+export type AssertWardrobeGroupsAvailable = (groups: readonly CustomizerWardrobeGroup[]) => Promise<void>
+export type HairStyleReference = ReturnType<typeof collectCustomizerHairStyleReferences>[number]
+export type AssertHairStylesAvailable = (references: readonly HairStyleReference[]) => Promise<void>
+export type AssertFaceAssetsAvailable = (references: readonly CustomizerFaceAssetReference[]) => Promise<void>
+export type AssertFabricatorPosesAvailable = (references: readonly FabricatorPoseReference[]) => Promise<void>
+export type AssertDependentFabricatorPosesAvailable = (previous: CustomizerCharacter, next: CustomizerCharacter) => Promise<void>
+export type CoordinatePoseReferenceChange = <T>(operation: () => Promise<T> | T) => Promise<T>
+
+export type CustomizerCharacterReferenceChecks = {
+  assertWardrobeGroupsAvailable?: AssertWardrobeGroupsAvailable
+  assertHairStylesAvailable?: AssertHairStylesAvailable
+  assertFaceAssetsAvailable?: AssertFaceAssetsAvailable
+  assertFabricatorPosesAvailable?: AssertFabricatorPosesAvailable
+  assertDependentFabricatorPosesAvailable?: AssertDependentFabricatorPosesAvailable
+  coordinatePoseReferenceChange?: CoordinatePoseReferenceChange
+}
+
+export class CustomizerCharacterService {
+  private saveQueue: Promise<void> = Promise.resolve()
+  private readonly repository: Pick<CustomizerCharacterRepository, 'list' | 'save'>
+  private readonly newId: () => string
+  private readonly now: () => string
+  private readonly referenceChecks: Required<CustomizerCharacterReferenceChecks>
+
+  constructor(
+    repository: Pick<CustomizerCharacterRepository, 'list' | 'save'>,
+    newId: () => string,
+    now: () => string,
+    referenceChecks: CustomizerCharacterReferenceChecks = {}
+  ) {
+    this.repository = repository
+    this.newId = newId
+    this.now = now
+    this.referenceChecks = {
+      assertWardrobeGroupsAvailable: referenceChecks.assertWardrobeGroupsAvailable ?? (async () => undefined),
+      assertHairStylesAvailable: referenceChecks.assertHairStylesAvailable ?? (async () => undefined),
+      assertFaceAssetsAvailable: referenceChecks.assertFaceAssetsAvailable ?? (async () => undefined),
+      assertFabricatorPosesAvailable: referenceChecks.assertFabricatorPosesAvailable ?? (async () => undefined),
+      assertDependentFabricatorPosesAvailable: referenceChecks.assertDependentFabricatorPosesAvailable ?? (async () => undefined),
+      coordinatePoseReferenceChange: referenceChecks.coordinatePoseReferenceChange ?? (async (operation) => operation())
+    }
+  }
+
+  /** Backup externo deve aguardar a mesma fila usada pelos handlers. */
+  get pendingWrites(): Promise<void> { return this.saveQueue }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.saveQueue.catch(() => undefined).then(operation)
+    this.saveQueue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  async list(): Promise<CustomizerCharacter[]> {
+    await this.saveQueue
+    return this.repository.list()
+  }
+
+  /** Serializa verificações de referências com toda gravação de personagens. */
+  withCharactersLocked<T>(operation: (characters: readonly CustomizerCharacter[]) => Promise<T>): Promise<T> {
+    return this.enqueue(async () => operation(await this.repository.list()))
+  }
+
+  save(character: unknown): Promise<void> {
+    if (!isCustomizerCharacter(character)) throw new Error('Dados de personagem inválidos.')
+    return this.referenceChecks.coordinatePoseReferenceChange(() => this.enqueue(async () => {
+      const characters = await this.repository.list()
+      const index = characters.findIndex((item) => item.id === character.id)
+      if (index < 0) throw new Error('Personagem não encontrado.')
+      const previous = characters[index]
+      const existingReferences = new Set((previous.customization.wardrobeGroups ?? []).map((group) => `${group.modelSlot}:${group.setId}:${group.componentId ?? ''}`))
+      const addedReferences = (character.customization.wardrobeGroups ?? []).filter((group) => !existingReferences.has(`${group.modelSlot}:${group.setId}:${group.componentId ?? ''}`))
+      const existingHairReferences = new Set(collectCustomizerHairStyleReferences(previous).map(({ modelSlot, id }) => `${modelSlot}:${id}`))
+      const addedHairReferences = collectCustomizerHairStyleReferences(character)
+        .filter(({ modelSlot, id }) => !existingHairReferences.has(`${modelSlot}:${id}`))
+      const existingFaceReferences = new Set(collectCustomizerFaceAssetReferences(previous).map(customizerFaceAssetReferenceKey))
+      const addedFaceReferences = collectCustomizerFaceAssetReferences(character)
+        .filter((reference) => !existingFaceReferences.has(customizerFaceAssetReferenceKey(reference)))
+      const addedPoseReferences = addedFabricatorPoseReferences(
+        collectCustomizerPoseReferences([character]), collectCustomizerPoseReferences([previous])
+      )
+      await this.referenceChecks.assertWardrobeGroupsAvailable(addedReferences)
+      await this.referenceChecks.assertHairStylesAvailable(addedHairReferences)
+      await this.referenceChecks.assertFaceAssetsAvailable(addedFaceReferences)
+      await this.referenceChecks.assertFabricatorPosesAvailable(addedPoseReferences)
+      if (previous.customization.modelSlot !== character.customization.modelSlot) {
+        await this.referenceChecks.assertDependentFabricatorPosesAvailable(previous, character)
+      }
+      characters[index] = { ...character, name: character.name.trim(), updatedAt: this.now() }
+      await this.repository.save(characters)
+    }))
+  }
+
+  async create(requestedName: unknown, requestedHeadSize?: unknown, requestedGender?: unknown): Promise<CustomizerCharacter> {
+    const name = typeof requestedName === 'string' ? requestedName.trim().slice(0, 80) : ''
+    if (!name) throw new Error('Digite um nome para o personagem.')
+    if (requestedHeadSize !== undefined && (typeof requestedHeadSize !== 'number'
+      || !Number.isInteger(requestedHeadSize)
+      || requestedHeadSize < characterProportionLimits.head.min
+      || requestedHeadSize > characterProportionLimits.head.max)) {
+      throw new Error('O tamanho inicial da cabeça deve estar entre 60% e 150%.')
+    }
+    if (requestedGender !== undefined && requestedGender !== 'female' && requestedGender !== 'male') {
+      throw new Error('Gênero do personagem inválido.')
+    }
+    let created!: CustomizerCharacter
+    await this.referenceChecks.coordinatePoseReferenceChange(() => this.enqueue(async () => {
+      const characters = await this.repository.list()
+      const now = this.now()
+      created = {
+        id: this.newId(), name,
+        hair: '#47354b', outfit: '#df9ab6', skin: '#f2d9c9',
+        customization: {
+          gender: requestedGender ?? 'female', modelSlot: 1, poseSlot: 1, partOverrides: {}, layerOrder: [],
+          ...(requestedHeadSize === undefined ? {} : { proportions: { ...defaultCharacterProportions, head: requestedHeadSize } })
+        },
+        createdAt: now, updatedAt: now
+      }
+      characters.push(created)
+      await this.repository.save(characters)
+    }))
+    return created
+  }
+
+  delete(id: unknown): Promise<void> {
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id)) throw new Error('Identificador de personagem inválido.')
+    return this.referenceChecks.coordinatePoseReferenceChange(() => this.enqueue(async () => {
+      const characters = await this.repository.list()
+      if (!characters.some((character) => character.id === id)) throw new Error('Personagem não encontrado.')
+      await this.repository.save(characters.filter((character) => character.id !== id))
+    }))
+  }
+}

@@ -1,17 +1,19 @@
+# Dependências, builds e outputs
 node_modules/
-build/
 out/
 dist/
 release/
 coverage/
 *.log
-app-data/
-tools-local/
-resources/video-tools/
+npm-debug.log*
+
+# Dados pessoais, estado local e ferramentas nativas
 .env
 .env.*
 !.env.example
-config/porta-local.bat
+app-data/
+/tools-local/
+resources/video-tools/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
@@ -20,7 +22,13 @@ config/porta-local.bat
 *.db-wal
 *.backup
 *.tmp
+
+# IDE / Sistema
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Build nativo e porta local
+build/
+config/porta-local.bat

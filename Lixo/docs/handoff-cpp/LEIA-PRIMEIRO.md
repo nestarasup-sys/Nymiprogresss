@@ -1,0 +1,17 @@
+# Pacote de reconstrução do Native Gacha
+
+Este pacote contém o código-fonte commitado do Native Gacha e documentação de contexto para uma IA ou equipe que vá avaliar uma reconstrução em C++ e tecnologias nativas.
+
+- O snapshot vem da branch `Main-desenvolvimento`; o hash exato é informado junto com o ZIP.
+- O aplicativo existente é Electron + React + TypeScript. Ele ainda não foi reimplementado em C++.
+- O Studio Principal é um módulo próprio de composição de cenas.
+- O arquivo ZIP não deve incluir `.git`, dependências instaladas, builds, binários FFmpeg nem `app-data`. `app-data` é perfil/runtime que pode conter personagens, projetos e mídia privada. Os testes usam fixtures sintéticas para explicar os contratos sem expor dados pessoais.
+
+## Por onde começar
+
+1. Leia `GUIA_RECONSTRUCAO_CPP.md` para arquitetura proposta, limites de escopo e roteiro de migração.
+2. Leia `MAPA_DO_APP.md` para localizar módulos e fluxos funcionais.
+3. Leia `README.md`, `docs/architecture/ADR-001-modular-electron.md`, `docs/architecture/ADR-002-fluxo-personagens.md` e `docs/architecture/CHARACTER_PRODUCTION_CONTRACT.md`.
+4. Use o código e os testes como fonte dos contratos reais. Documentos `CICLO_*` são registros históricos e podem estar desatualizados em relação ao código atual.
+
+O snapshot inclui código versionado, documentação, scripts, testes, configuração e lockfile. Para executar o app atual: Node.js 22.22+ e `npm ci`; os comandos estão em `README.md` e `package.json`. Isso serve para executar e comparar o app atual, não para compilar a futura versão C++.

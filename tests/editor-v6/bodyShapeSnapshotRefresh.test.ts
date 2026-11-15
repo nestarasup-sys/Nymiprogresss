@@ -1,0 +1,116 @@
+import { readFile } from 'node:fs/promises'
+import { describe, expect, it } from 'vitest'
+import type { CustomizerCharacter } from '../../src/shared/customizer'
+import type { FabricatorProject } from '../../src/shared/fabricator'
+import type { CharacterRenderAssetProvider } from '../../src/shared/characterRenderAssets'
+import { resolveSavedCharacterSource } from '../../src/renderer/src/characters/characterSourceResolver'
+import { EDITOR_V6_FACE_RENDER_VERSION } from '../../src/renderer/src/features/editorV6/faceModeAssets'
+import { planEditorV6CharacterRefresh } from '../../src/renderer/src/features/editorV6/editorV6CharacterRefreshPlan'
+import * as legacyRefreshExports from '../../src/renderer/src/features/editorV6/characterSnapshotRefresh'
+
+describe('geometria corporal no refresh de snapshots do Editor V6', () => {
+  it('mantém o planejador disponível pelo módulo de refresh legado', () => {
+    expect(legacyRefreshExports.planEditorV6CharacterRefresh).toBe(planEditorV6CharacterRefresh)
+  })
+
+  it('descarta fonte de snapshot de outro slot e recarrega o modelo da personagem', async () => {
+    const source = { slot: 1, width: 10, height: 10, parts: [], layerOrder: [], hiddenPartIds: [] } as unknown as FabricatorProject
+    const staleSource = { ...source, slot: 2 }
+    const character = { id: 'slot-check', name: 'Slot check', createdAt: '', updatedAt: '', hair: '', outfit: '', skin: '', customization: { modelSlot: 1, poseSlot: null, partOverrides: {}, layerOrder: [] } } as unknown as CustomizerCharacter
+    let loadedSlot = 0
+    const assetProvider = {
+      loadFabricatorSlot: async (slot: number) => { loadedSlot = slot; return source },
+      loadFabricatorPose: async () => null
+    } as unknown as CharacterRenderAssetProvider
+
+    const resolved = await resolveSavedCharacterSource(character, { source: staleSource, artwork: staleSource, assetProvider })
+
+    expect(loadedSlot).toBe(1)
+    expect(resolved.source.slot).toBe(1)
+    expect(resolved.sourceArtwork).toBe(source)
+  })
+
+  it('aplica o ajuste de coxa uma vez, como no Customizador, ao atualizar o snapshot', async () => {
+    const stamp = '2026-10-31T19:29:24.028Z'
+    const source = {
+      slot: 1,
+      width: 100,
+      height: 120,
+      parts: [
+        { id: 'torso', name: 'Tronco', x: 40, y: 25, width: 20, height: 45, rotation: 0, dataUrl: '' },
+        { id: 'thigh', name: 'Coxa esquerda', x: 34, y: 62, width: 16, height: 38, rotation: 0, dataUrl: '' }
+      ],
+      joints: [{ id: 'hip', parentPartId: 'torso', childPartId: 'thigh', parentAnchor: { x: 48, y: 65 }, childAnchor: { x: 42, y: 62 } }],
+      layerOrder: ['torso', 'thigh'],
+      hiddenPartIds: []
+    } as unknown as FabricatorProject
+    const character = {
+      id: 'yest-fixture',
+      name: 'Yest fixture',
+      createdAt: stamp,
+      updatedAt: stamp,
+      hair: '#000000',
+      outfit: '#000000',
+      skin: '#000000',
+      customization: { modelSlot: 1, poseSlot: null, partOverrides: {}, layerOrder: [], bodyDimensions: { thighsWidth: 113 } }
+    } as unknown as CustomizerCharacter
+    const assetProvider = {} as CharacterRenderAssetProvider
+
+    const previewSource = await resolveSavedCharacterSource(character, { source, artwork: source, assetProvider })
+    const previewThighWidth = previewSource.artwork.parts.find((part) => part.id === 'thigh')!.width
+    const thighToTorsoRatio = (artwork: typeof previewSource.artwork) =>
+      artwork.parts.find((part) => part.id === 'thigh')!.width / artwork.parts.find((part) => part.id === 'torso')!.width
+    const previewRatio = thighToTorsoRatio(previewSource.artwork)
+
+    // Reproduce the old refresh behavior: feed the already-shaped preview art
+    // back into the resolver, which used to enlarge the thigh a second time.
+    const doubleShaped = await resolveSavedCharacterSource(character, { ...previewSource, artwork: previewSource.artwork })
+    const doubleShapedThighWidth = doubleShaped.artwork.parts.find((part) => part.id === 'thigh')!.width
+    const doubleShapedRatio = thighToTorsoRatio(doubleShaped.artwork)
+
+    // The refresh must instead pass through the original pose/model artwork.
+    const refreshed = await resolveSavedCharacterSource(character, { ...previewSource, artwork: previewSource.sourceArtwork })
+    const refreshedThighWidth = refreshed.artwork.parts.find((part) => part.id === 'thigh')!.width
+
+    expect(doubleShapedThighWidth).toBeGreaterThan(previewThighWidth)
+    expect(doubleShapedRatio).not.toBe(previewRatio)
+    expect(refreshedThighWidth).toBe(previewThighWidth)
+    expect(thighToTorsoRatio(refreshed.artwork)).toBe(previewRatio)
+    expect(refreshed.artwork.parts.find((part) => part.id === 'torso')!.width)
+      .toBe(previewSource.artwork.parts.find((part) => part.id === 'torso')!.width)
+
+    const refreshImplementation = await readFile('src/renderer/src/features/editorV6/characterSnapshotRefresh.ts', 'utf8')
+    expect(refreshImplementation).toContain('artwork: source.sourceArtwork')
+
+    const oldSnapshot = {
+      id: 'snapshot-yest', kind: 'character', characterId: character.id, assetId: 'old-asset', text: character.name,
+      poseSlot: null, characterSourceUpdatedAt: stamp, faceRendererVersion: EDITOR_V6_FACE_RENDER_VERSION - 1
+    }
+    const refreshPlan = planEditorV6CharacterRefresh(
+      { id: 'project', elements: [oldSnapshot], timeline: { tracks: [] } } as never,
+      [character], {}
+    )
+    expect(refreshPlan.groups).toHaveLength(1)
+  })
+
+  it('re-renderiza todos os snapshots atuais da cena e timeline quando forçado ao abrir', () => {
+    const character = {
+      id: 'current-character', name: 'Current', createdAt: '', updatedAt: 'character-v1', hair: '', outfit: '', skin: '',
+      customization: { modelSlot: 1, poseSlot: null, partOverrides: {}, layerOrder: [] }
+    } as unknown as CustomizerCharacter
+    const element = {
+      id: 'scene-element', kind: 'character', characterId: character.id, assetId: 'scene-image', text: character.name,
+      poseSlot: null, characterSourceUpdatedAt: character.updatedAt, faceRendererVersion: EDITOR_V6_FACE_RENDER_VERSION
+    }
+    const blockState = { ...element, id: 'timeline-state', assetId: 'timeline-image' }
+    const project = {
+      id: 'project', elements: [element],
+      timeline: { tracks: [{ id: 'cast-track', blocks: [{ id: 'cast-block', elementId: element.id, state: blockState }] }] }
+    }
+
+    const plan = planEditorV6CharacterRefresh(project as never, [character], {}, {}, {}, {}, {}, {}, true)
+
+    expect(plan.groups).toHaveLength(1)
+    expect(plan.groups[0].targets.map((target) => target.id)).toEqual(['scene-element', 'cast-block'])
+  })
+})

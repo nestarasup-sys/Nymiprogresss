@@ -1,0 +1,148 @@
+.v6-colored-workspace {
+  --v6-ink: #19151c;
+  --v6-violet: #6941a5;
+  --v6-paper: #fff;
+  --v6-border: #e4d5e8;
+  background: #efe7f3;
+}
+
+.v6-colored-workspace .v6-tool-rail {
+  background: #f8eff8;
+  border-color: var(--v6-border);
+}
+
+.v6-tool-group[data-tone="scene"] { --ink:#7e234e;--fill:#f9d8e9;--edge:#d996b8; }
+.v6-tool-group[data-tone="text"] { --ink:#583088;--fill:#ebdcfa;--edge:#ba9adc; }
+.v6-tool-group[data-tone="media"] { --ink:#4b2676;--fill:#e4d4f5;--edge:#aa88ce; }
+.v6-tool-group[data-tone="output"] { --ink:var(--v6-ink);--fill:var(--v6-paper);--edge:#cbb6d1; }
+
+.v6-colored-workspace .v6-tool-group h2 { color:var(--ink); }
+.v6-colored-workspace .v6-tool-group .studio-tool-button {
+  background:var(--fill);border-color:var(--edge);color:var(--ink);
+}
+.v6-colored-workspace .v6-tool-group .studio-tool-button > span { color:inherit; }
+.v6-colored-workspace .v6-tool-group .studio-tool-button:hover:not(:disabled) {
+  border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink);
+}
+.v6-colored-workspace .v6-tool-group .studio-tool-button.active,
+.v6-colored-workspace .v6-tool-group .studio-tool-button.active:hover {
+  background:var(--ink);border-color:var(--ink);color:white;
+}
+
+.v6-colored-workspace .studio-inspector {
+  background:var(--v6-paper);border-color:var(--v6-border);
+}
+.v6-colored-workspace .v6-inspector-heading { background:var(--v6-ink); }
+.v6-colored-workspace .v6-inspector-heading h2 { color:white; }
+.v6-colored-workspace .v6-inspector-views { padding-top:8px;background:#f5eaf7; }
+.v6-colored-workspace .v6-inspector-views button[aria-pressed="true"] {
+  background:var(--v6-violet);border-color:var(--v6-violet);color:white;
+}
+.v6-colored-workspace .studio-preset-button.active,
+.v6-colored-workspace .studio-expression-mode.active,
+.v6-colored-workspace .studio-expression-option.selected {
+  background:#f0dffa;border-color:#b18ad5;color:#57317d;
+}
+
+.v6-colored-workspace .studio-editor-inspector-column .studio-expression-look-left {
+  background:#c9253c;border-color:#b02034;color:white;
+}
+.v6-colored-workspace .studio-editor-inspector-column .studio-expression-look-left:is(:hover:not(:disabled),[aria-pressed="true"]) {
+  background:#9d182d;border-color:#801327;color:white;
+}
+.v6-colored-workspace .studio-editor-inspector-column .studio-expression-look-left[aria-pressed="true"] {
+  box-shadow:inset 0 0 0 1px white;
+}
+
+.v6-colored-workspace .editor-v6-timeline { border-color:var(--v6-border); }
+.v6-colored-workspace .editor-v6-timeline-toolbar {
+  background:var(--v6-paper);border-color:var(--v6-border);
+}
+.v6-colored-workspace .editor-v6-timeline-title > :is(strong,span,small) { color:var(--v6-ink); }
+.v6-colored-workspace .editor-v6-timeline-actions > button {
+  background:#f5eaf7;border-color:#c8aace;color:var(--v6-ink);
+}
+.v6-colored-workspace .editor-v6-timeline-actions > button.active {
+  background:#f8c4df;border-color:#f8c4df;color:#63203f;
+}
+.v6-colored-workspace .editor-v6-timeline-block.kind-speech {
+  background:#f9d4e5;border-color:#c77c9c;color:#6e2849;
+}
+.v6-colored-workspace .editor-v6-timeline-block.kind-thought {
+  background:#eadcf9;border-color:#a784c8;color:#543279;
+}
+.v6-colored-workspace .editor-v6-timeline-block.kind-video {
+  background:#dfcdf4;border-color:#9265be;color:#43216c;
+}
+.v6-colored-workspace .editor-v6-timeline-block.kind-audio {
+  background:#f6deef;border-color:#bb83ad;color:#642750;
+}
+.v6-colored-workspace .editor-v6-timeline-block.kind-background {
+  background:#f2ebfa;border-color:#a88dbf;color:#4b3560;
+}
+.v6-colored-workspace .editor-v6-timeline-block.kind-object {
+  background:#f1e3f8;border-color:#9d71b3;color:#502863;
+}
+
+.v6-project-browser {
+  --v6-font-body: 14px;
+  --v6-font-caption: 12px;
+}
+
+.v6-colored-workspace {
+  --v6-font-body: 17px;
+  --v6-font-caption: 14px;
+  --v6-font-heading: 19px;
+}
+
+.v6-colored-workspace :is(.v6-tool-rail,.studio-inspector) :is(button,span,p,label,input,select,textarea),
+.v6-colored-workspace .v6-tool-rail .studio-tool-button > span,
+.v6-project-browser :is(.studio-action,.studio-card-open,.studio-empty-state strong) {
+  font-size: var(--v6-font-body);
+}
+
+.v6-colored-workspace :is(.v6-tool-rail,.studio-inspector) :is(small,kbd),
+.v6-project-browser :is(.studio-page-header small,.studio-empty-state small) {
+  font-size: var(--v6-font-caption);
+}
+
+.v6-colored-workspace :is(.v6-tool-group,.v6-inspector-heading,.studio-side-content) > h2,
+.v6-colored-workspace .editor-v6-timeline-title > strong {
+  font-size: var(--v6-font-heading);
+}
+
+.v6-colored-workspace .v6-tool-rail .studio-tool-button {
+  min-height: 46px;
+}
+
+.v6-colored-workspace .studio-inspector :is(.studio-expression-option,.studio-preset-button,.studio-expression-mode,.v6-inspector-views button) {
+  min-height: 36px;
+}
+
+.v6-colored-workspace .v6-timeline-pro :is(
+  .editor-v6-timeline-title > span,
+  .editor-v6-timeline-actions > button,
+  .editor-v6-timeline-track-heading > strong,
+  .v6-track-name,
+  .editor-v6-timeline-block > span
+) {
+  font-size: var(--v6-font-caption);
+}
+
+.v6-colored-workspace .v6-timeline-pro :is(
+  .editor-v6-timeline-title > small,
+  .editor-v6-timeline-ruler-row > .editor-v6-timeline-track-heading,
+  .editor-v6-timeline-ruler > span,
+  .editor-v6-timeline-block > small,
+  .collapsed .editor-v6-timeline-block > span
+) {
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .v6-colored-workspace .editor-v6-timeline-actions {
+    position: static;
+    transform: none;
+    margin-inline: auto;
+  }
+}

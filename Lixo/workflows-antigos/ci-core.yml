@@ -1,0 +1,75 @@
+name: Core architecture validation
+
+on:
+  push:
+    branches: [main, Main-desenvolvimento]
+    paths:
+      - 'electron/**'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'ATUALIZAR_DESENVOLVIMENTO.bat'
+      - 'ABRIR_DESENVOLVIMENTO.bat'
+      - '.github/workflows/ci-core.yml'
+  pull_request:
+    branches: [main, Main-desenvolvimento, refactor/shared-character-core]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.5'
+          cache: npm
+      - name: Install dependencies (skip native postinstall in CI)
+        run: npm ci --ignore-scripts
+      - name: Audit module boundaries
+        run: npm run audit:architecture
+      - name: Verify refactor contracts
+        run: npm run test:refactor
+      - name: Geometry regression
+        run: npm run test:geometry
+      - name: Test rebuilt Video Studio contracts (Windows only)
+        if: matrix.os == 'windows-latest'
+        run: npm run test:video:next
+      - name: Verify existing serial export contracts (Windows only)
+        if: matrix.os == 'windows-latest'
+        run: npm run test:export:synthetic
+      - name: Smoke Windows process-tree memory probe
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          .\scripts\video-studio\windows-memory-probe.ps1 -RootPid $PID -Samples 1 | Select-Object -First 1 | Out-Null
+      - name: Smoke Windows semantic SceneIR stress
+        if: matrix.os == 'windows-latest'
+        run: node scripts/video-studio/windows-sceneir-stress.cjs
+      - name: Verify updater targets canonical development branch (Windows only)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $bat = Get-Content 'ATUALIZAR_DESENVOLVIMENTO.bat' -Raw
+          if (-not $bat.Contains('set "DEV_BRANCH=Main-desenvolvimento"')) { throw 'Updater branch is not Main-desenvolvimento' }
+          if (-not $bat.Contains('git pull --ff-only origin "%DEV_BRANCH%"')) { throw 'Updater must use a safe fast-forward pull' }
+          if ($bat -match '(?i)git\s+(reset\s+--hard|clean\s+-[a-z]*f)') { throw 'Updater must not force-clean the user worktree' }
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Compile Electron/React
+        run: npm run build

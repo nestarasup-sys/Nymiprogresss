@@ -1,22 +1,26 @@
 # Nymiprogresss — Native Gacha
 
-**Migração progressiva para Qt 6/QML + C++20.** O **Editor V6** é o único editor mantido. O aplicativo também inclui Fabricador DEV, Customizador, Studio, Roteiros, Base de vídeos, Biblioteca V6 e Logs DEV.
+**Projeto em migração progressiva para Qt 6/QML + C++20.** O único editor mantido é o **Editor V6**. A migração não está concluída: o aplicativo completo original ainda depende de Electron, e o protótipo nativo é apenas uma prova técnica.
 
-## Situação real
+## Áreas preservadas do aplicativo legado
 
-O repositório foi inicializado com a fundação nativa e ferramentas para importar o código-fonte reorganizado. **O aplicativo completo ainda depende de Electron; a migração para Qt está em andamento.** A interface Qt é um protótipo, não substitui ainda as áreas em produção. Preservaremos o aplicativo funcional até termos paridade verificável.
+- Fabricador DEV — ferramentas para produzir bibliotecas.
+- Customizador — personagens e configurações individuais.
+- Studio — composição de personagens e cenas.
+- Roteiros — organização e exportações de roteiros.
+- Base de vídeos — gerenciamento dos vídeos e fundos.
+- Editor V6 e Biblioteca V6 — edição audiovisual e mídia.
+- Logs DEV — diagnósticos e gerenciamento.
 
-## Importar o código completo
+Os dados pessoais e `app-data/` não devem entrar no Git. A primeira migração deve preservar IDs de personagens, catálogos, mídias e documentos existentes. Não execute migrações destrutivas sem cópia de segurança.
 
-O pacote reorganizado inclui todas as áreas do app, remove as integrações da versão experimental descartada do editor, move os documentos antigos para `Lixo/` e mantém `ABRIR_DESENVOLVIMENTO.bat` com porta inicial 5196.
+## Abrir no Windows
 
-1. Baixe o pacote `Nymiprogresss-fonte-reorganizada.zip` fornecido nesta conversa.
-2. Clone o repositório: `git clone https://github.com/nestarasup-sys/Nymiprogresss.git`.
-3. Na pasta clonada, execute `IMPORTAR_FONTE_PREPARADA.bat "C:\caminho\Nymiprogresss-fonte-reorganizada.zip"`. O script valida o pacote, recusa alterações locais e faz commit/push para `main`.
+- `ABRIR_DESENVOLVIMENTO.bat`: **aplicativo completo legado** (somente depois da importação do código original), Vite na porta padrão **5196**, sem executar `predev`. Pode sobrescrever com `NATIVE_GACHA_DEV_PORT` ou `config/porta-local.bat` (veja o exemplo).
+- `ABRIR_NATIVO.bat`: protótipo Qt, depois de compilar. **Qt nativo não exige porta HTTP.**
+- `ATUALIZAR_DESENVOLVIMENTO.bat`: `git pull --ff-only` do `main`, recusa alterações locais e remotes incorretos.
 
-Não use projetos pessoais, mídia privada ou bancos locais como fonte para publicação. A pasta `app-data/` permanece fora do Git.
-
-## Testar o núcleo C++ sem Qt
+## Núcleo C++ — teste sem Qt
 
 ```bash
 cmake -S . -B build/native -DNYMI_BUILD_DESKTOP=OFF -DBUILD_TESTING=ON
@@ -24,15 +28,29 @@ cmake --build build/native --config Release
 ctest --test-dir build/native --build-config Release --output-on-failure
 ```
 
-## Compilar o protótipo Qt
-
-Instale Qt 6.5+, compilador C++20 e CMake, depois:
+## Protótipo visual Qt 6.5+
 
 ```bash
 cmake -S . -B build/native -DNYMI_BUILD_DESKTOP=ON
 cmake --build build/native --config Release
 ```
 
-No Windows, `ABRIR_NATIVO.bat` inicia o protótipo compilado. Qt não precisa de porta HTTP; **a porta 5196 é somente para o legado V6 aberto por `ABRIR_DESENVOLVIMENTO.bat`** após a importação.
+A interface protótipo mostra a navegação das áreas e um objeto animado pelo motor de keyframes C++20. **Ainda não executa funcionalidades reais** das áreas; é o início da substituição do Chromium.
 
-A documentação antiga é histórica e não confiável; somente código, testes, formatos conferidos e decisões novas fundamentam a migração.
+## Organização
+
+- `native/nymi-core`: motor C++ independente de interface e testes.
+- `native/desktop-qt`: protótipo da interface desktop Qt/QML.
+- `electron`, `src`, `tests`: aplicativo legado importado e preservado, incluindo apenas o Editor V6.
+- `Lixo/`: documentos antigos e workflows legados. **Material histórico não confiável**; não constitui requisito ou evidência atual.
+- `docs-atuais/`: decisões curtas baseadas no código e nos testes atuais.
+
+## Próximas provas obrigatórias
+
+1. Validar V6 e todas as áreas no Windows após retirar somente as integrações V7.
+2. Definir contratos versionados de projetos, personagens, catálogos e mídia sem depender de documentos antigos.
+3. Migrar uma cena V6 real para o motor nativo e comparar quadros, áudio e tempos com o resultado do V6 original.
+4. Integrar exportação FFmpeg e UI Qt ao mesmo estado de cena.
+5. Migrar cada outra área preservando dados. Electron só deve sair quando houver paridade funcional.
+
+Não registrar projetos privados, mídia do usuário, arquivos `.env`, bancos de dados ou tokens. Repositório público.

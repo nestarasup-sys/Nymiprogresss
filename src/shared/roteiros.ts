@@ -1,0 +1,103 @@
+import type { VideoTimeline } from './baseVideos'
+import type { VideoLibraryReference } from './mediaLibrary'
+
+export type RoteiroTikTok = {
+  id: string
+  title: string
+  videoTitle: string
+  video?: RoteiroVideoReference | null
+  blocks?: RoteiroReactionBlock[]
+  description?: string
+  timeline?: RoteiroTimeline
+  sceneEndSeconds?: number
+  firstGroupReactionSeconds?: number
+  secondGroupReactionSeconds?: number
+  additionalContext?: string
+}
+
+export type RoteiroVideoReference = VideoLibraryReference
+
+export type RoteiroReactionBlock = {
+  id: string
+  characterId: string
+  kind: 'fala' | 'pensamento'
+  expression: string
+  textPortuguese: string
+  textEnglish: string
+  startAt?: number
+}
+
+export type RoteiroSectionContent = {
+  video: RoteiroVideoReference | null
+  blocks: RoteiroReactionBlock[]
+  description?: string
+  timeline?: RoteiroTimeline
+  sceneEndSeconds?: number
+  firstGroupReactionSeconds?: number
+  secondGroupReactionSeconds?: number
+  additionalContext?: string
+}
+
+export type RoteiroTimeline = VideoTimeline
+export type RoteiroExportLog = { id: string; roteiroId: string; createdAt: string; action: string; status: 'success' | 'error'; details: string }
+
+export type RoteiroDocument = {
+  id: string
+  title: string
+  videoTitle: string
+  characterIds: string[]
+  backgroundAssetId?: string | null
+  uiGifAssetId?: string | null
+  previewDetailsCollapsed?: boolean
+  opening?: RoteiroSectionContent
+  tiktoks: RoteiroTikTok[]
+  importOrigin?: { kind: 'ai-json'; importId: string; importedAt: string; createdCharacterIds: string[]; sourceTitle: string; sourceFormat?: 'NYMI_EDITOR_V6_REACT_V1'; sourceDocument?: import('./editorV6ReactImport').EditorV6ReactImportSource }
+}
+
+export type RoteiroExportCharacterInfo = {
+  id: string
+  name: string
+  modelSlot: number
+  hair: string
+  outfit: string
+  skin: string
+  hasFaceAppearance: boolean
+  poseSlots: number[]
+  expressions: string[]
+}
+
+export type RoteiroUiGifItem = { id: string; name: string; size: number; createdAt: string; builtIn?: boolean; available: boolean }
+
+export type CharacterSheetRelationship = { id: string; targetCharacterId: string; description: string }
+export type CharacterSheet = {
+  characterId: string
+  characterName: string
+  personality: string
+  backstory: string
+  fynRelationship: string
+  speakingStyle: string
+  relationships: CharacterSheetRelationship[]
+  additionalRules: string
+  updatedAt: string
+}
+
+export type RoteirosDesktopApi = {
+  listCharacterSheets: () => Promise<CharacterSheet[]>
+  saveCharacterSheet: (sheet: CharacterSheet) => Promise<void>
+  listRoteiros: () => Promise<RoteiroDocument[]>
+  saveRoteiros: (roteiros: RoteiroDocument[]) => Promise<void>
+  listRoteiroExportLogs: (roteiroId: string) => Promise<RoteiroExportLog[]>
+  appendRoteiroExportLog: (roteiroId: string, entry: RoteiroExportLog) => Promise<void>
+  clearRoteiroExportLogs: (roteiroId: string) => Promise<void>
+  startRoteiroCharacterExport: (request: { id: string; title: string; characters: Array<{ id: string; name: string }> }) => Promise<{ jobId: string; folderName: string; assetCountLimit: number }>
+  writeRoteiroCharacterExportAsset: (jobId: string, asset: { characterId: string; pose: number; expression: string; role: 'base' | 'blink' | 'talk' | 'pt' | 'pt-blink' | 'pt-talk'; dataUrl: string }) => Promise<void>
+  finishRoteiroCharacterExport: (jobId: string) => Promise<{ folderName: string; path: string; characters: number; files: number }>
+  cancelRoteiroCharacterExport: (jobId: string) => Promise<void>
+  exportRoteiroAssets: (request: { roteiro: RoteiroDocument; kind: 'background' | 'videos' | 'script' | 'gif'; characters?: RoteiroExportCharacterInfo[] }) => Promise<{ path: string; files: number }>
+  exportRoteiroV6Text: (content: string) => Promise<string | null>
+  revealRoteiroV6Text: () => Promise<void>
+  openRoteiroExportFolder: (request: { roteiro: RoteiroDocument; kind: 'characters' | 'background' | 'videos' | 'script' | 'ui' }) => Promise<void>
+  listRoteiroUiGifs: () => Promise<RoteiroUiGifItem[]>
+  importRoteiroUiGif: () => Promise<RoteiroUiGifItem | null>
+  deleteRoteiroUiGif: (id: string) => Promise<void>
+}

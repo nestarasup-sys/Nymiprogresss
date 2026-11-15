@@ -1,0 +1,278 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { FIRST_HAIR_MOTION_PRESET } from '../src/shared/hairMotionEngine.ts'
+import { createEditorV6HairMotionHeadPathInterpolator, createEditorV6HairMotionRigInterpolator, editorV6HairMotionHeadAnchor, editorV6HairMotionHeadAnchorX, editorV6HairMotionHeadPathDelta, editorV6HairMotionHeadPathPoint, editorV6HairMotionInstancePhase, editorV6HairMotionLayerHeadPosition, editorV6HairMotionLocalHeadDelta, interpolateEditorV6HairMotionHeadPathPoint, interpolateEditorV6HairMotionRig, parseEditorV6HairMotionBundle } from '../src/shared/editorV6HairMotion.ts'
+import { planEditorV6Export } from '../src/shared/editorV6Export.ts'
+import { expandEditorV6HairCrop } from '../src/renderer/src/features/editorV6/editorV6HairMotionGeometry.ts'
+
+test('recomposição preserva largura, altura e centro do recorte com escala e espelhamento', () => {
+  const crop = { left: 25, top: 40, width: 160, height: 500 }
+  const full = { width: 400, height: 600 }
+  for (const rotation of [0, 37]) for (const flipX of [false, true]) {
+    const element = { x: 8, y: -7, width: 18, height: 82, rotation, flipX, characterScale: 190, characterWidthScale: 120, characterHeightScale: 85 }
+    const expanded = expandEditorV6HairCrop(element, full, crop)
+    assert.ok(Math.abs(expanded.width * crop.width / full.width - element.width) < 1e-9)
+    assert.ok(Math.abs(expanded.height * crop.height / full.height - element.height) < 1e-9)
+    const dx = (crop.left + crop.width / 2 - full.width / 2) * expanded.width / full.width * 1.9 * 1.2 * 19.2 * (flipX ? -1 : 1)
+    const dy = (crop.top + crop.height / 2 - full.height / 2) * expanded.height / full.height * 1.9 * .85 * 10.8
+    const radians = rotation * Math.PI / 180
+    assert.ok(Math.abs(expanded.x + (dx * Math.cos(radians) - dy * Math.sin(radians)) / 19.2 - element.x) < 1e-9)
+    assert.ok(Math.abs(expanded.y + (dx * Math.sin(radians) + dy * Math.cos(radians)) / 10.8 - element.y) < 1e-9)
+  }
+})
+
+const validBundle = () => ({
+  presetSlot: 2,
+  preset: structuredClone(FIRST_HAIR_MOTION_PRESET),
+  surfaces: [{ id: 'body', dataUrl: 'data:image/png;base64,AA==' }, { id: 'face', dataUrl: 'data:image/png;base64,AA==' }, { id: 'eyes', dataUrl: 'data:image/png;base64,AA==' }],
+  textures: [{ id: 'hair', dataUrl: 'data:image/png;base64,AA==' }],
+  rigs: [{
+    elementId: 'element-1', assetId: 'asset-1', characterId: 'character-1',
+    poseSlot: 1,
+    baseSurfaceId: 'body', faceSurfaceId: 'face', eyesAboveRearHairSurfaceId: 'eyes', overlaySurfaceId: null,
+    artworkWidth: 100, artworkHeight: 200, outputWidth: 100, outputHeight: 200,
+    shapeScaleX: 1, shapeScaleY: 1,
+    sourceCrop: { left: 0, top: 0, width: 80, height: 180 },
+    sourceHead: { width: 40, height: 40 },
+    targetHead: { x: 30, y: 5, width: 40, height: 40, rotation: 0 },
+    layers: [{ id: 'fringe-1', textureId: 'hair', side: 'fringe', width: 20, height: 30, x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, flipX: false, phase: 1.2 }]
+  }]
+})
+
+test('validates export-only hair layers and their cross-references', () => {
+  const bundle = validBundle()
+  bundle.preparationProfile = {
+    totalMilliseconds: 7,
+    stages: [],
+    counts: { surfaces: 3, textures: 1, rigs: 1, motionTransitions: 0, encodedCharacters: 128 },
+    reuse: {
+      modelLoads: 1, modelReuses: 2, poseLoads: 1, poseReuses: 2,
+      hairStyleLoads: 3, hairStyleReuses: 6, hairTextureBuilds: 4, hairTextureReuses: 5
+    }
+  }
+  const parsed = parseEditorV6HairMotionBundle(bundle)
+  assert.equal(parsed.presetSlot, 2)
+  assert.deepEqual(parsed.preset, FIRST_HAIR_MOTION_PRESET)
+  assert.deepEqual(parsed.preparationProfile.reuse, bundle.preparationProfile.reuse)
+  assert.equal(parsed.rigs[0].layers[0].textureId, 'hair')
+  assert.equal(parsed.rigs[0].eyesAboveRearHairSurfaceId, 'eyes')
+  const legacyBundle = validBundle()
+  delete legacyBundle.rigs[0].eyesAboveRearHairSurfaceId
+  const legacyParsed = parseEditorV6HairMotionBundle(legacyBundle)
+  assert.equal(legacyParsed.rigs[0].eyesAboveRearHairSurfaceId, undefined)
+  assert.equal(legacyParsed.preparationProfile, undefined)
+  const invalidReuse = structuredClone(bundle)
+  invalidReuse.preparationProfile.reuse.hairTextureReuses = -1
+  assert.throws(() => parseEditorV6HairMotionBundle(invalidReuse))
+  const invalid = validBundle()
+  invalid.rigs[0].layers[0].textureId = 'missing'
+  assert.throws(() => parseEditorV6HairMotionBundle(invalid), /imagem de cabelo preparada/i)
+  const hiddenHair = validBundle()
+  hiddenHair.rigs[0].layers = []
+  assert.throws(() => parseEditorV6HairMotionBundle(hiddenHair), /camada visível de cabelo/i)
+})
+
+test('export rejects a stale or out-of-range experimental preset slot', () => {
+  const options = { startFrame: 0, endFrame: 30, width: 1920, height: 1080, turbo: true, encoder: 'auto', hairAnimationPresetSlot: 3 }
+  assert.equal(planEditorV6Export(options, 60).length, 2)
+  assert.throws(() => planEditorV6Export({ ...options, hairAnimationPresetSlot: 6 }, 60), /preset de animação de cabelo/i)
+})
+
+test('bundle valida atlas de transição sem cabelo e preserva referências de face e recorte', () => {
+  const bundle = validBundle()
+  bundle.motionTransitions = [{
+    elementId: 'element-1', key: 'motion-key', startFrame: 10, endFrame: 12,
+    behindFaceSurfaceId: 'body', faceSurfaceId: 'face', eyesAboveRearHairSurfaceId: 'eyes', overlaySurfaceId: null, faceAtlasSurfaceId: null,
+    frames: [{
+      offset: -1,
+      sprite: { x: 0, y: 0, width: 20, height: 30, atlasWidth: 20, atlasHeight: 30 },
+      crop: { left: 4, top: 6, width: 20, height: 30 },
+      x: 1, y: 2, width: 20, height: 30, rotation: 4, flipX: true,
+      facePatch: { sprite: { x: 0, y: 0, width: 4, height: 4, atlasWidth: 4, atlasHeight: 4 }, x: .2, y: .3, width: .1, height: .1 }
+    }]
+  }]
+  const parsed = parseEditorV6HairMotionBundle(bundle)
+  assert.equal(parsed.motionTransitions[0].frames[0].crop.left, 4)
+  assert.equal(parsed.motionTransitions[0].frames[0].facePatch.sprite.width, 4)
+  const missingSurface = structuredClone(bundle)
+  missingSurface.motionTransitions[0].faceSurfaceId = 'missing'
+  assert.throws(() => parseEditorV6HairMotionBundle(missingSurface), /camada de pose sem cabelo/i)
+  const missingRaisedEyes = structuredClone(bundle)
+  missingRaisedEyes.motionTransitions[0].eyesAboveRearHairSurfaceId = 'missing'
+  assert.throws(() => parseEditorV6HairMotionBundle(missingRaisedEyes), /camada de pose sem cabelo/i)
+  const duplicateFrame = structuredClone(bundle)
+  duplicateFrame.motionTransitions[0].frames.push(duplicateFrame.motionTransitions[0].frames[0])
+  assert.throws(() => parseEditorV6HairMotionBundle(duplicateFrame), /quadros duplicados/i)
+})
+
+test('a inércia do cabelo usa a cabeça no espaço do palco, incluindo escala, giro e espelhamento', () => {
+  const rig = validBundle().rigs[0]
+  const element = { x: -25, y: 0, width: 40, height: 60, rotation: 0, flipX: false, characterScale: 100, characterWidthScale: 100, characterHeightScale: 100 }
+  assert.equal(editorV6HairMotionHeadAnchorX(element, rig), .3)
+  const offCenter = { ...rig, targetHead: { ...rig.targetHead, x: 50 } }
+  assert.equal(editorV6HairMotionHeadAnchorX(element, offCenter), .4)
+  assert.equal(editorV6HairMotionHeadAnchorX({ ...element, flipX: true }, offCenter), .1)
+  assert.ok(Math.abs(editorV6HairMotionHeadAnchorX({ ...element, rotation: 90 }, { ...offCenter, targetHead: { ...offCenter.targetHead, y: 50 } }) - .2875) < 1e-9)
+  assert.equal(editorV6HairMotionHeadAnchorX({ ...element, characterWidthScale: 150 }, offCenter), .475)
+})
+
+test('a fase individual é estável por instância e não depende da ordem da cena', () => {
+  for (const count of [1, 2, 3, 4, 8, 32]) {
+    const ids = Array.from({ length: count }, (_, index) => `elemento-sintetico-${index + 1}`)
+    const inOrder = ids.map(editorV6HairMotionInstancePhase)
+    const reversed = [...ids].reverse().map(editorV6HairMotionInstancePhase).reverse()
+    assert.deepEqual(reversed, inOrder)
+    assert.ok(inOrder.every(phase => Number.isFinite(phase) && phase >= 0 && phase < Math.PI * 2))
+    assert.equal(new Set(inOrder).size, count, `fase repetida entre ${count} instâncias sintéticas`)
+  }
+  assert.equal(editorV6HairMotionInstancePhase('instancia-A'), editorV6HairMotionInstancePhase('instancia-A'))
+  assert.notEqual(editorV6HairMotionInstancePhase('instancia-A'), editorV6HairMotionInstancePhase('instancia-B'))
+})
+
+test('o movimento do ator é convertido uma vez para o eixo local em giro e espelhamento', () => {
+  assert.equal(editorV6HairMotionLocalHeadDelta(.1, 0, 0, false), .1)
+  assert.equal(editorV6HairMotionLocalHeadDelta(.1, 0, 0, true), -.1)
+  assert.ok(Math.abs(editorV6HairMotionLocalHeadDelta(0, .16, 90, false) - .09) < 1e-12)
+  assert.ok(Math.abs(editorV6HairMotionLocalHeadDelta(0, .16, 90, true) + .09) < 1e-12)
+  // A global flip toggling in place has zero actor-center displacement; the
+  // exporter tracks authored head offsets separately to prevent a false kick.
+  assert.equal(editorV6HairMotionLocalHeadDelta(0, 0, 37, true), 0)
+  assert.equal(editorV6HairMotionLayerHeadPosition(.08, false), .08)
+  assert.equal(editorV6HairMotionLayerHeadPosition(.08, true), -.08)
+})
+
+test('mudança de flipX em uma troca de pose não cria impulso falso na cabeça', () => {
+  const base = { centerX: .3, centerY: .4, localX: -.06, rotation: 0, flipX: false }
+  const mirrored = { ...base, flipX: true }
+  assert.equal(editorV6HairMotionHeadPathDelta(base, mirrored), 0)
+  const movedAndRotated = { ...mirrored, centerX: .32, centerY: .42, rotation: 90 }
+  assert.ok(Math.abs(editorV6HairMotionHeadPathDelta(mirrored, movedAndRotated) + .01125) < 1e-12)
+})
+
+test('a âncora usa o centro de um recorte transparente deslocado, não o centro do canvas original', () => {
+  const rig = validBundle().rigs[0]
+  const element = { x: -25, y: 0, width: 40, height: 60, rotation: 0, flipX: false }
+  const offCenterHead = { ...rig, targetHead: { ...rig.targetHead, x: 50 } }
+  const fullCanvas = { ...offCenterHead, sourceCrop: { left: 0, top: 0, width: 100, height: 200 } }
+  const cropped = { ...offCenterHead, sourceCrop: { left: 10, top: 20, width: 80, height: 180 } }
+  assert.equal(editorV6HairMotionHeadAnchorX(element, fullCanvas), .33)
+  assert.equal(editorV6HairMotionHeadAnchorX(element, cropped), .35)
+})
+
+test('a âncora interpolada usa a geometria local da cabeça entre duas poses', () => {
+  const from = validBundle().rigs[0]
+  const to = { ...from, targetHead: { ...from.targetHead, x: 50, rotation: 350 }, sourceCrop: { ...from.sourceCrop, left: 10 }, layers: [{ ...from.layers[0], x: 8, y: 6, width: 30, height: 42, scaleX: 1.5, rotation: 20, flipX: true }] }
+  const halfway = interpolateEditorV6HairMotionRig(from, to, .5)
+  assert.equal(halfway.targetHead.x, 40)
+  assert.equal(halfway.targetHead.rotation, -5)
+  assert.equal(halfway.sourceCrop.left, 5)
+  assert.deepEqual({ x: halfway.layers[0].x, y: halfway.layers[0].y, width: halfway.layers[0].width, height: halfway.layers[0].height, scaleX: halfway.layers[0].scaleX, rotation: halfway.layers[0].rotation, flipX: halfway.layers[0].flipX }, { x: 4, y: 3, width: 25, height: 36, scaleX: 1.25, rotation: 10, flipX: true })
+  const element = { x: -25, y: 0, width: 40, height: 60, rotation: 0, flipX: false }
+  assert.equal(editorV6HairMotionHeadAnchorX(element, halfway), .325)
+  assert.throws(() => interpolateEditorV6HairMotionRig(from, to, 1.1), /progresso da geometria/i)
+})
+
+test('interpolador compilado mantém o resultado direto em todos os quadros amostrados', () => {
+  const from = validBundle().rigs[0]
+  const to = {
+    ...from,
+    targetHead: { ...from.targetHead, x: 50, rotation: 350 },
+    sourceCrop: { ...from.sourceCrop, left: 10 },
+    layers: [
+      { ...from.layers[0], x: 8, y: 6, width: 30, height: 42, scaleX: 1.5, rotation: 20, flipX: true },
+      { ...from.layers[0], id: 'unmatched', side: 'back' }
+    ]
+  }
+  const interpolate = createEditorV6HairMotionRigInterpolator(from, to)
+  const reference = (progress) => {
+    const mix = (left, right) => left + (right - left) * progress
+    const angle = (left, right) => left + ((((right - left) % 360 + 540) % 360) - 180) * progress
+    return {
+      ...from,
+      artworkWidth: mix(from.artworkWidth, to.artworkWidth), artworkHeight: mix(from.artworkHeight, to.artworkHeight),
+      outputWidth: mix(from.outputWidth, to.outputWidth), outputHeight: mix(from.outputHeight, to.outputHeight),
+      shapeScaleX: mix(from.shapeScaleX, to.shapeScaleX), shapeScaleY: mix(from.shapeScaleY, to.shapeScaleY),
+      sourceCrop: {
+        left: mix(from.sourceCrop.left, to.sourceCrop.left), top: mix(from.sourceCrop.top, to.sourceCrop.top),
+        width: mix(from.sourceCrop.width, to.sourceCrop.width), height: mix(from.sourceCrop.height, to.sourceCrop.height)
+      },
+      targetHead: {
+        x: mix(from.targetHead.x, to.targetHead.x), y: mix(from.targetHead.y, to.targetHead.y),
+        width: mix(from.targetHead.width, to.targetHead.width), height: mix(from.targetHead.height, to.targetHead.height),
+        rotation: angle(from.targetHead.rotation, to.targetHead.rotation)
+      },
+      layers: from.layers.map(layer => {
+        const matching = to.layers.find(candidate => candidate.id === layer.id && candidate.side === layer.side)
+        if (!matching) return layer
+        return {
+          ...layer,
+          width: mix(layer.width, matching.width), height: mix(layer.height, matching.height),
+          x: mix(layer.x, matching.x), y: mix(layer.y, matching.y),
+          scaleX: mix(layer.scaleX, matching.scaleX), scaleY: mix(layer.scaleY, matching.scaleY),
+          rotation: angle(layer.rotation, matching.rotation),
+          flipX: progress < .5 ? layer.flipX : matching.flipX
+        }
+      })
+    }
+  }
+
+  for (const progress of [0, .1, .5, .9, 1]) {
+    assert.deepEqual(interpolate(progress), reference(progress))
+  }
+  assert.throws(() => interpolate(1.1), /progresso da geometria/i)
+})
+
+test('interpolador compilado de trajetória mantém os pontos e a troca de espelhamento', () => {
+  const fromRig = validBundle().rigs[0]
+  const toRig = { ...fromRig, targetHead: { ...fromRig.targetHead, x: 42, y: 12, rotation: 350 }, sourceCrop: { ...fromRig.sourceCrop, left: 10 } }
+  const from = { x: -25, y: 4, width: 40, height: 60, rotation: 15, flipX: false, characterScale: 125, characterWidthScale: 95, characterHeightScale: 110 }
+  const to = { ...from, x: -12, y: -4, rotation: 40, flipX: true, width: 55, height: 70 }
+  const interpolate = createEditorV6HairMotionHeadPathInterpolator(from, to, fromRig, toRig)
+  const fromPoint = editorV6HairMotionHeadPathPoint(from, fromRig)
+  const toPoint = editorV6HairMotionHeadPathPoint(to, toRig)
+  const rotationDelta = ((((toPoint.rotation - fromPoint.rotation) % 360 + 540) % 360) - 180)
+  const reference = (progress) => {
+    const mix = (left, right) => left + (right - left) * progress
+    return {
+      centerX: mix(fromPoint.centerX, toPoint.centerX),
+      centerY: mix(fromPoint.centerY, toPoint.centerY),
+      localX: mix(fromPoint.localX, toPoint.localX),
+      rotation: fromPoint.rotation + rotationDelta * progress,
+      flipX: progress < .5 ? fromPoint.flipX : toPoint.flipX
+    }
+  }
+
+  for (const progress of [0, .1, .49, .5, .9, 1]) {
+    assert.deepEqual(interpolate(progress), reference(progress))
+  }
+  assert.throws(() => interpolate(-.1), /progresso da geometria da cabeça/i)
+})
+
+test('trocas só de expressão não transformam variações do recorte em velocidade física da cabeça', () => {
+  const rig = validBundle().rigs[0]
+  const actor = { x: -25, y: 0, width: 40, height: 60, rotation: 0, flipX: false, characterScale: 100, characterWidthScale: 100, characterHeightScale: 100 }
+  const faceCropA = { ...rig, sourceCrop: { left: 0, top: 0, width: 80, height: 180 } }
+  const faceCropB = { ...rig, sourceCrop: { left: 12, top: 8, width: 56, height: 164 } }
+  assert.notEqual(editorV6HairMotionHeadAnchor(actor, faceCropA).localX, editorV6HairMotionHeadAnchor(actor, faceCropB).localX, 'o fixture precisa demonstrar a variação visual de recorte')
+
+  // Both expression endpoints use the same stable pose rig. Their rendered
+  // atlas crops are intentionally absent from this physical path calculation.
+  const start = editorV6HairMotionHeadPathPoint(actor, faceCropA)
+  const samples = [0, .25, .5, .75, 1].map(progress => interpolateEditorV6HairMotionHeadPathPoint(actor, actor, faceCropA, faceCropA, progress))
+  assert.ok(samples.every(point => editorV6HairMotionHeadPathDelta(start, point) === 0), 'a mudança de recorte facial não deve injetar impulso na física')
+})
+
+test('movimentos reais interpolam a geometria estável da cabeça entre poses', () => {
+  const fromRig = validBundle().rigs[0]
+  const toRig = { ...fromRig, poseSlot: 2, sourceCrop: { left: 14, top: 9, width: 56, height: 164 }, targetHead: { ...fromRig.targetHead, x: 42, y: 13, rotation: 18 } }
+  const from = { x: -25, y: 0, width: 40, height: 60, rotation: 0, flipX: false, characterScale: 100, characterWidthScale: 100, characterHeightScale: 100 }
+  const to = { ...from, x: -17, y: 5, rotation: 28, flipX: true, width: 44, height: 62 }
+  const start = interpolateEditorV6HairMotionHeadPathPoint(from, to, fromRig, toRig, 0)
+  const middle = interpolateEditorV6HairMotionHeadPathPoint(from, to, fromRig, toRig, .5)
+  const end = interpolateEditorV6HairMotionHeadPathPoint(from, to, fromRig, toRig, 1)
+  assert.ok(editorV6HairMotionHeadPathDelta(start, middle) !== 0)
+  assert.ok(editorV6HairMotionHeadPathDelta(middle, end) !== 0)
+  assert.equal(middle.flipX, true)
+  assert.ok(Math.abs(middle.rotation - 14) < 1e-9)
+  assert.throws(() => interpolateEditorV6HairMotionHeadPathPoint(from, to, fromRig, toRig, 1.1), /progresso da geometria da cabeça/i)
+})

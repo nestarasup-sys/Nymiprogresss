@@ -1,0 +1,113 @@
+import { describe, expect, it } from 'vitest'
+import { EDITOR_V6_ENCODER_CHOICES, editorV6BenchmarkAudioMatchesExport, editorV6ExportContentEndFrame, planEditorV6Audio, planEditorV6Export, splitEditorV6ExportParts } from '../../src/shared/editorV6Export'
+import { editorV6ExportAudioSchema } from '../../src/shared/editorV6Schema'
+import { EDITOR_V6_EXPORT_TEST_MODES, editorV6ExportTestSettings, editorV6ExportModeFileSuffix } from '../../src/shared/editorV6ExportTestModes'
+const options = { startFrame: 5, endFrame: 86, width: 1920, height: 1080, turbo: true, encoder: 'cpu' as const }
+describe('planejamento de exportação do Editor V6', () => {
+  it('calcula o fim do conteúdo sem usar duração velha, personagens persistentes ou fundos', () => {
+    const project = {
+      timeline: { durationFrames: 930, tracks: [
+        { kind: 'character', blocks: [{ startFrame: 0, durationFrames: 930 }] },
+        { kind: 'video', blocks: [{ startFrame: 0, durationFrames: 402 }] },
+        { kind: 'video', blocks: [{ startFrame: 402, durationFrames: 528, background: { backgroundColor: '#fff' } }] },
+        { kind: 'object', blocks: [{ startFrame: 500, durationFrames: 430, emptyGap: true }] }
+      ] }, exportAudio: []
+    } as never
+    expect(editorV6ExportContentEndFrame(project)).toBe(402)
+    expect(editorV6ExportContentEndFrame({ ...project, timeline: { ...project.timeline, tracks: [project.timeline.tracks[0]] } })).toBe(930)
+  })
+
+  it('não estende o intervalo padrão com conteúdo oculto, silenciado ou invisível', () => {
+    const project = {
+      timeline: { durationFrames: 1200, tracks: [
+        { kind: 'video', blocks: [{ startFrame: 0, durationFrames: 402 }] },
+        { kind: 'video', hidden: true, blocks: [{ startFrame: 402, durationFrames: 600 }] },
+        { kind: 'audio', muted: true, blocks: [{ startFrame: 420, durationFrames: 500 }] },
+        { kind: 'object', blocks: [{ startFrame: 450, durationFrames: 600, state: { visible: false } }] }
+      ] }, exportAudio: []
+    } as never
+    expect(editorV6ExportContentEndFrame(project)).toBe(402)
+  })
+
+  it('expõe apenas codificadores aceitos pelo contrato de exportação', () => {
+    expect(EDITOR_V6_ENCODER_CHOICES.map((choice) => choice.value)).toEqual(['auto', 'cpu', 'amf'])
+    for (const choice of EDITOR_V6_ENCODER_CHOICES) {
+      expect(() => planEditorV6Export({ ...options, encoder: choice.value }, 100)).not.toThrow()
+    }
+    expect(() => planEditorV6Export({ ...options, encoder: 'libx264' as 'cpu' }, 100)).toThrow('Codificador inválido.')
+  })
+
+  it('permite somente os modos de exportação com parâmetros reais e preserva planejamento de quadros', () => {
+    expect(EDITOR_V6_EXPORT_TEST_MODES).toHaveLength(6)
+    expect(editorV6ExportModeFileSuffix()).toBe('')
+    for (const mode of EDITOR_V6_EXPORT_TEST_MODES) expect(editorV6ExportModeFileSuffix(mode.id)).toBe(' - ' + mode.id)
+    expect(editorV6ExportTestSettings('controle')).toEqual({ motionConcurrency: 2, mouthConcurrency: 2, captureRetryMilliseconds: 16, encodeFaceCropPng: false })
+    expect(editorV6ExportTestSettings('movimentos-1').motionConcurrency).toBe(1)
+    expect(editorV6ExportTestSettings('boca-1').mouthConcurrency).toBe(1)
+    expect(editorV6ExportTestSettings('captura-8').captureRetryMilliseconds).toBe(8)
+    expect(editorV6ExportTestSettings('rosto-legado').encodeFaceCropPng).toBe(true)
+    for (const mode of EDITOR_V6_EXPORT_TEST_MODES) {
+      expect(planEditorV6Export({ ...options, testMode: mode.id }, 100)).toEqual(planEditorV6Export(options, 100))
+    }
+    expect(() => planEditorV6Export({ ...options, testMode: 'sem-validacao' as 'controle' }, 100)).toThrow('Modo de teste')
+  })
+
+  it('valida projetos reais com cabelo e som, sem exigir um vídeo silencioso', () => {
+    expect(editorV6BenchmarkAudioMatchesExport(0, false)).toBe(true)
+    expect(editorV6BenchmarkAudioMatchesExport(1, true)).toBe(true)
+    expect(editorV6BenchmarkAudioMatchesExport(12, true)).toBe(true)
+    expect(editorV6BenchmarkAudioMatchesExport(0, true)).toBe(false)
+    expect(editorV6BenchmarkAudioMatchesExport(3, false)).toBe(false)
+    expect(editorV6BenchmarkAudioMatchesExport(-1, false)).toBe(false)
+    expect(editorV6BenchmarkAudioMatchesExport(1.2, true)).toBe(false)
+  })
+  it('rejeita durações inválidas ou inseguras antes de planejar quadros', () => {
+    for (const duration of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => planEditorV6Export({ ...options, endFrame: 1 }, duration)).toThrow('A duração do documento é inválida.')
+    }
+  })
+
+  it('exige 1080p e duas partes no Turbo obrigatório', () => {
+    expect(planEditorV6Export({ ...options, forceTurbo1080: true }, 100)).toHaveLength(2)
+    for (const update of [{ turbo: false }, { width: 1280, height: 720 }, { startFrame: 5, endFrame: 6 }]) {
+      expect(() => planEditorV6Export({ ...options, ...update, forceTurbo1080: true }, 100)).toThrow('Turbo obrigatório')
+    }
+  })
+
+  it('valida a opção de renderizar com um worker sem alterar a divisão Turbo', () => {
+    expect(planEditorV6Export({ ...options, singleWorker: true }, 100)).toHaveLength(2)
+    expect(planEditorV6Export({ ...options, singleWorker: false }, 100)).toHaveLength(2)
+    expect(() => planEditorV6Export({ ...options, singleWorker: 'sim' as never }, 100)).toThrow('worker único')
+  })
+
+  it('divide intervalos ímpares sem repetir nem omitir quadros', () => {
+    expect(planEditorV6Export(options, 100)).toEqual([{ index: 0, startFrame: 5, endFrame: 45 }, { index: 1, startFrame: 45, endFrame: 86 }])
+    for (const count of [1, 2, 3, 29, 30, 31, 18000]) {
+      const parts = planEditorV6Export({ ...options, startFrame: 0, endFrame: count }, count)
+      expect(parts[0].startFrame).toBe(0)
+      expect(parts.at(-1)!.endFrame).toBe(count)
+      expect(parts.reduce((sum, part) => sum + part.endFrame - part.startFrame, 0)).toBe(count)
+      if (parts.length === 2) expect(parts[0].endFrame).toBe(parts[1].startFrame)
+    }
+  })
+  it('divide exportações longas em trechos contíguos sem perder as emendas do Turbo', () => {
+    const planned = splitEditorV6ExportParts(planEditorV6Export({ ...options, startFrame: 0, endFrame: 5700 }, 5700), 300)
+    expect(planned[0]).toEqual({ index: 0, startFrame: 0, endFrame: 300 })
+    expect(planned.at(-1)).toEqual({ index: planned.length - 1, startFrame: 5550, endFrame: 5700 })
+    expect(planned.every((part, index) => part.endFrame - part.startFrame <= 300 && (index === 0 || planned[index - 1].endFrame === part.startFrame))).toBe(true)
+    expect(planned.reduce((total, part) => total + part.endFrame - part.startFrame, 0)).toBe(5700)
+    expect(() => splitEditorV6ExportParts(planned, 0)).toThrow()
+  })
+  it('rejeita intervalo e resolução inválidos', () => {
+    for (const update of [{ endFrame: 101 }, { startFrame: -1 }, { startFrame: 86 }, { width: 1919 }, { height: 1000 }]) expect(() => planEditorV6Export({ ...options, ...update }, 100)).toThrow()
+  })
+  it('recorta e desloca o áudio sobre o intervalo inteiro da exportação', () => {
+    const clip = { id: crypto.randomUUID(), fileName: `${crypto.randomUUID()}.wav`, name: 'Música', sourceFrames: 900, sourceInFrame: 30, startFrame: 90, durationFrames: 300, gain: 1, muted: false }
+    expect(planEditorV6Audio([clip], 120, 240)[0]).toMatchObject({ sourceInFrame: 60, durationFrames: 120, delayFrames: 0 })
+    expect(planEditorV6Audio([clip], 30, 240)[0]).toMatchObject({ sourceInFrame: 30, durationFrames: 150, delayFrames: 60 })
+    expect(planEditorV6Audio([{ ...clip, muted: true }], 0, 900)).toEqual([])
+    expect(planEditorV6Audio([{ ...clip, gain: 0 }], 0, 900)).toEqual([])
+    expect(editorV6ExportAudioSchema.safeParse({ ...clip, sourceInFrame: 800 }).success).toBe(false)
+    expect(editorV6ExportAudioSchema.safeParse({ ...clip, fileName: '../música.wav' }).success).toBe(false)
+  })
+})

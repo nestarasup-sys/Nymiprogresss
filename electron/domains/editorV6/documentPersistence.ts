@@ -1,0 +1,222 @@
+/** Persistência dos documentos e mídias do EditorV6 Principal. */
+import { join, resolve, dirname, basename } from 'node:path'
+import type * as nodeFs from 'node:fs/promises'
+import { createEditorV6Timeline, editorV6LibraryAssetUrl, syncEditorV6TimelineElements, type EditorV6Asset, type EditorV6Document, type EditorV6ProjectSummary, type EditorV6Timeline } from '../../../src/shared/editorV6'
+import { createKeyedOperationQueue } from '../storage/keyedOperationQueue.ts'
+import { publishEditorV6AssetsAndManifest, recoverEditorV6AssetTransaction } from './assetTransaction.ts'
+import { normalizeEditorV6CharacterPositions } from '../../../src/shared/editorV6TimelineEdits'
+import { invalidateIncompleteEditorV6Motions } from '../../../src/shared/editorV6Motion'
+import { normalizeEditorV6Timeline } from '../../../src/shared/editorV6TimelineCore'
+import { editorV6DocumentSchema, editorV6MediaAssetSchema } from '../../../src/shared/editorV6Schema'
+import { collectEditorV6VideoReferenceIds } from './videoReferences.ts'
+import { collectEditorV6LibraryReferenceIds } from './mediaReferences.ts'
+
+type Files = Pick<typeof nodeFs, 'readFile' | 'writeFile' | 'mkdir' | 'access' | 'rename' | 'unlink' | 'rm'>
+
+export function createEditorV6DocumentPersistence(deps: {
+  files: Files
+  editorV6Path: (id: string) => string
+  editorV6LibraryPath: () => string
+  validate: (document: unknown) => document is EditorV6Document
+  assertLibraryVideoReferencesAvailable: (videoIds: readonly string[]) => Promise<void>
+  assertLibraryBackgroundReferencesAvailable: (ids: readonly string[]) => Promise<void>
+  assertLibraryMediaReferencesAvailable: (category: 'object' | 'audio', ids: readonly string[]) => Promise<void>
+  coordinateLibraryReferenceChange: <T>(operation: () => Promise<T>) => Promise<T>
+  decodeImage: (dataUrl: string) => Buffer
+  normalizeImage: (bytes: Buffer) => Promise<{ bytes: Buffer }>
+}) {
+  const { readFile, mkdir, rm } = deps.files
+  const operations = createKeyedOperationQueue()
+
+  function normalizeEditorV6(value: Record<string, unknown>, id: string): EditorV6Document {
+    const elements = Array.isArray(value.elements) ? value.elements as EditorV6Document['elements'] : []
+    const timeline = value.timeline && typeof value.timeline === 'object'
+      ? normalizeEditorV6Timeline(syncEditorV6TimelineElements(value.timeline as EditorV6Timeline, elements))
+      : createEditorV6Timeline(elements)
+    return {
+      schemaVersion: 1, id,
+      title: String(value.title ?? 'Editor V6').slice(0, 100),
+      color: String(value.color ?? '#d7b5cd'),
+      createdAt: String(value.createdAt ?? new Date().toISOString()),
+      updatedAt: String(value.updatedAt ?? new Date().toISOString()),
+      backgroundColor: typeof value.backgroundColor === 'string' && /^#[0-9a-f]{6}$/i.test(value.backgroundColor) ? value.backgroundColor : '#d7b5cd',
+      backgroundAssetId: typeof value.backgroundAssetId === 'string' ? value.backgroundAssetId : null,
+      backgroundX: typeof value.backgroundX === 'number' && Number.isFinite(value.backgroundX) ? value.backgroundX : 0,
+      backgroundY: typeof value.backgroundY === 'number' && Number.isFinite(value.backgroundY) ? value.backgroundY : 0,
+      backgroundWidth: typeof value.backgroundWidth === 'number' && Number.isFinite(value.backgroundWidth) ? value.backgroundWidth : 100,
+      backgroundHeight: typeof value.backgroundHeight === 'number' && Number.isFinite(value.backgroundHeight) ? value.backgroundHeight : 100,
+      backgroundRotation: typeof value.backgroundRotation === 'number' && Number.isFinite(value.backgroundRotation) ? value.backgroundRotation : 0,
+      ...(value.characterNameColors && typeof value.characterNameColors === 'object' && !Array.isArray(value.characterNameColors)
+        ? { characterNameColors: Object.fromEntries(Object.entries(value.characterNameColors as Record<string, unknown>).filter(([, color]) => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color))) as Record<string, string> }
+        : {}),
+      ...(typeof value.balloonScalePercent === 'number' && Number.isFinite(value.balloonScalePercent) && value.balloonScalePercent >= 100 && value.balloonScalePercent <= 250
+        ? { balloonScalePercent: value.balloonScalePercent }
+        : {}),
+      ...(typeof value.balloonOffsetY === 'number' && Number.isFinite(value.balloonOffsetY) && value.balloonOffsetY >= -100 && value.balloonOffsetY <= 100
+        ? { balloonOffsetY: value.balloonOffsetY }
+        : {}),
+      ...(typeof value.thumbnailDataUrl === 'string' && /^data:image\/(jpeg|png);base64,/.test(value.thumbnailDataUrl) && value.thumbnailDataUrl.length <= 1_500_000 ? { thumbnailDataUrl: value.thumbnailDataUrl } : {}),
+      assets: Array.isArray(value.assets) ? (value.assets as EditorV6Asset[]).map((asset) => asset.libraryAssetId
+        ? { ...asset, dataUrl: editorV6LibraryAssetUrl(id, asset.libraryAssetId) }
+        : asset) : [],
+      ...(Array.isArray(value.media) ? { media: (value.media as NonNullable<EditorV6Document['media']>).map((item) => ({ ...item, ...(item.libraryVideoId || item.libraryAudioId ? { fileName: `${item.libraryVideoId ?? item.libraryAudioId}.${item.fileName.split('.').at(-1)}` } : {}) })) } : {}),
+      elements,
+      ...(Array.isArray(value.exportAudio) ? { exportAudio: value.exportAudio as EditorV6Document['exportAudio'] } : {}),
+      timeline,
+    }
+  }
+
+  async function readEditorV6(id: string): Promise<EditorV6Document | null> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) throw new Error('Identificador de EditorV6 inválido.')
+    try {
+      const folder = deps.editorV6Path(id)
+      await recoverEditorV6AssetTransaction(deps.files, folder)
+      const raw = JSON.parse(await readFile(join(folder, 'editorV6.json'), 'utf8')) as Record<string, unknown>
+      const normalized = normalizeEditorV6CharacterPositions(normalizeEditorV6(raw, id))
+      const states = [...normalized.elements, ...normalized.timeline.tracks.flatMap(track => track.blocks.flatMap(block => block.state ? [block.state] : []))]
+      const visibleAssets = new Set([normalized.backgroundAssetId, ...states.flatMap(state => [state.assetId, ...Object.values(state.faceModeAssetIds ?? {})])])
+      const derivedMotionAssets = new Set(normalized.timeline.tracks.flatMap(track => track.blocks.flatMap(block => block.incomingMotion ? [block.incomingMotion.assetId, block.incomingMotion.faceAssetId] : [])))
+      const assets = await Promise.all(normalized.assets.map(async (asset) => {
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(asset.id)
+          || !['background', 'object', 'character'].includes(asset.category)
+          || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType)) throw new Error('Biblioteca de imagens do EditorV6 inválida.')
+        if (asset.libraryAssetId) {
+          if (asset.category === 'character' || asset.id !== asset.libraryAssetId) throw new Error('Referência de imagem compartilhada inválida.')
+          return { ...asset, dataUrl: editorV6LibraryAssetUrl(id, asset.libraryAssetId) }
+        }
+        const extension = asset.mimeType === 'image/jpeg' ? 'jpg' : asset.mimeType.slice('image/'.length)
+        const categoryFolder = asset.category === 'background' ? 'backgrounds' : asset.category === 'character' ? 'characters' : 'objects'
+        try {
+          const data = await readFile(join(folder, 'assets', categoryFolder, `${asset.id}.${extension}`))
+          return { ...asset, dataUrl: `data:${asset.mimeType};base64,${data.toString('base64')}` }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT' && derivedMotionAssets.has(asset.id) && !visibleAssets.has(asset.id)) return null
+          throw error
+        }
+      }))
+      const media = (normalized.media ?? []).map((item) => editorV6MediaAssetSchema.parse(item))
+      await Promise.all(media.filter((item) => !item.libraryVideoId && !item.libraryAudioId).map((item) => deps.files.access(join(folder, 'media', item.fileName))))
+      const document = invalidateIncompleteEditorV6Motions({ ...normalized, assets: assets.filter(asset => asset !== null), media })
+      if (!deps.validate(document)) throw new Error(`Os dados do EditorV6 ${id} estão inválidos.`)
+      return document
+    } catch (reason) {
+      if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw reason
+    }
+  }
+
+  async function readEditorV6Summary(id: string): Promise<EditorV6ProjectSummary | null> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) throw new Error('Identificador de EditorV6 inválido.')
+    try {
+      const folder = deps.editorV6Path(id)
+      await recoverEditorV6AssetTransaction(deps.files, folder)
+      const raw = JSON.parse(await readFile(join(folder, 'editorV6.json'), 'utf8')) as Record<string, unknown>
+      if (raw.id !== id) throw new Error(`O manifesto do Editor V6 ${id} tem identificador incompatível.`)
+      const thumbnailDataUrl = typeof raw.thumbnailDataUrl === 'string'
+        && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(raw.thumbnailDataUrl)
+        && raw.thumbnailDataUrl.length <= 1_500_000 ? raw.thumbnailDataUrl : undefined
+      return {
+        id,
+        title: String(raw.title ?? 'Editor V6').slice(0, 100),
+        color: typeof raw.color === 'string' && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : '#d7b5cd',
+        createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+        updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
+        ...(thumbnailDataUrl ? { thumbnailDataUrl } : {})
+      }
+    } catch (reason) {
+      if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw reason
+    }
+  }
+
+  async function readEditorV6PoseReferences(id: string): Promise<Pick<EditorV6Document, 'id' | 'title' | 'elements' | 'timeline'> | null> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) throw new Error('Identificador de EditorV6 inválido.')
+    const folder = deps.editorV6Path(id)
+    await recoverEditorV6AssetTransaction(deps.files, folder)
+    let contents: string
+    try {
+      contents = await readFile(join(folder, 'editorV6.json'), 'utf8')
+    } catch (reason) {
+      if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw reason
+    }
+    const raw = JSON.parse(contents) as Record<string, unknown>
+    if (raw.id !== id || !Array.isArray(raw.elements)) throw new Error(`Os vínculos de pose do Editor V6 ${id} estão inválidos.`)
+    const document = normalizeEditorV6(raw, id)
+    return { id, title: document.title, elements: document.elements, timeline: document.timeline }
+  }
+
+  async function writeEditorV6(editorV6: EditorV6Document): Promise<void> {
+    if (!deps.validate(editorV6)) {
+      const parsed = editorV6DocumentSchema.safeParse(editorV6)
+      const details = parsed.success ? '' : parsed.error.issues.slice(0, 8).map((issue) => `${issue.path.join('.') || 'projeto'}: ${issue.message}`).join('; ')
+      throw new Error(`Dados do EditorV6 inválidos.${details ? ` ${details}` : ''}`)
+    }
+    const folder = deps.editorV6Path(editorV6.id)
+    await recoverEditorV6AssetTransaction(deps.files, folder)
+    let previousManifest: Record<string, unknown> = {}
+    try {
+      previousManifest = JSON.parse(await readFile(join(folder, 'editorV6.json'), 'utf8')) as Record<string, unknown>
+    } catch (reason) {
+      if ((reason as NodeJS.ErrnoException).code !== 'ENOENT') throw reason
+    }
+    const previousVideoIds = collectEditorV6VideoReferenceIds(previousManifest)
+    const addedVideoIds = [...collectEditorV6VideoReferenceIds(editorV6)].filter((id) => !previousVideoIds.has(id))
+    if (addedVideoIds.length) await deps.assertLibraryVideoReferencesAvailable(addedVideoIds)
+    await Promise.all([
+      mkdir(join(folder, 'assets', 'backgrounds'), { recursive: true }),
+      mkdir(join(folder, 'assets', 'objects'), { recursive: true }),
+      mkdir(join(folder, 'assets', 'characters'), { recursive: true }),
+      mkdir(join(folder, 'prints'), { recursive: true }),
+    ])
+    const assetManifest: Array<Omit<EditorV6Asset, 'dataUrl'>> = []
+    const assetWrites: Array<{ relativePath: string; bytes: Buffer }> = []
+    for (const asset of editorV6.assets) {
+      if (asset.libraryAssetId) {
+        if (asset.category === 'character' || asset.id !== asset.libraryAssetId) throw new Error('Referência de imagem compartilhada inválida.')
+        const { dataUrl: _dataUrl, ...metadata } = asset
+        assetManifest.push(metadata)
+        continue
+      }
+      const sourceBytes = deps.decodeImage(asset.dataUrl)
+      const canonical = asset.mimeType === 'image/png' ? { bytes: sourceBytes } : await deps.normalizeImage(sourceBytes)
+      const categoryFolder = asset.category === 'background' ? 'backgrounds' : asset.category === 'character' ? 'characters' : 'objects'
+      assetWrites.push({ relativePath: `assets/${categoryFolder}/${asset.id}.png`, bytes: canonical.bytes })
+      const { dataUrl: _dataUrl, ...metadata } = asset
+      assetManifest.push({ ...metadata, mimeType: 'image/png' })
+    }
+    const { assets: _assets, ...metadata } = editorV6
+    const previousBackgroundIds = collectEditorV6LibraryReferenceIds(previousManifest, 'background')
+    const previousObjectIds = collectEditorV6LibraryReferenceIds(previousManifest, 'object')
+    const previousAudioIds = collectEditorV6LibraryReferenceIds(previousManifest, 'audio')
+    const addedBackgroundIds = [...collectEditorV6LibraryReferenceIds(editorV6, 'background')].filter((id) => !previousBackgroundIds.has(id))
+    const addedObjectIds = [...collectEditorV6LibraryReferenceIds(editorV6, 'object')].filter((id) => !previousObjectIds.has(id))
+    const addedAudioIds = [...collectEditorV6LibraryReferenceIds(editorV6, 'audio')].filter((id) => !previousAudioIds.has(id))
+    await deps.coordinateLibraryReferenceChange(async () => {
+      await Promise.all([
+        deps.assertLibraryBackgroundReferencesAvailable(addedBackgroundIds),
+        deps.assertLibraryMediaReferencesAvailable('object', addedObjectIds),
+        deps.assertLibraryMediaReferencesAvailable('audio', addedAudioIds)
+      ])
+      await publishEditorV6AssetsAndManifest({
+      files: deps.files, folder, assets: assetWrites,
+      manifestValue: { ...metadata, title: editorV6.title.trim(), assets: assetManifest },
+      })
+    })
+  }
+
+  async function removeEditorV6(id: string): Promise<void> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) throw new Error('Identificador de EditorV6 inválido.')
+    const folder = resolve(deps.editorV6Path(id))
+    if (dirname(folder) !== resolve(deps.editorV6LibraryPath()) || basename(folder) !== `editorV6-${id}`) throw new Error('Pasta do EditorV6 inválida.')
+    await rm(folder, { recursive: true, force: true })
+  }
+
+  return {
+    readEditorV6: (id: string) => operations.run(id, () => readEditorV6(id)),
+    readEditorV6Summary: (id: string) => operations.run(id, () => readEditorV6Summary(id)),
+    readEditorV6PoseReferences: (id: string) => operations.run(id, () => readEditorV6PoseReferences(id)),
+    writeEditorV6: (document: EditorV6Document) => operations.run(document.id, () => writeEditorV6(document)),
+    removeEditorV6: (id: string) => operations.run(id, () => removeEditorV6(id)),
+  }
+}

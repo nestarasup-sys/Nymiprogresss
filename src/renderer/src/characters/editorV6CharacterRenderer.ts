@@ -1,0 +1,415 @@
+import type { FaceCatalogItem, FaceCatalogItemSummary, FaceElementKind, FaceExpressionEffects, FaceSheetKind, FabricatorProject } from '../../../shared/fabricator'
+import type { CharacterColorOverrides, CustomizerCharacter, CustomizerFaceAppearance, CustomizerWardrobePaletteKey } from '../../../shared/customizer'
+import { resolveEditorV6TalkMouthId, type EditorV6FaceRenderMode, type EditorV6FaceTransforms } from '../../../shared/editorV6'
+import { isEditorV6BlinkRenderMode } from '../../../shared/editorV6FaceSchedule'
+import { configureCharacterSampling } from './renderResolution'
+import type { CharacterRenderAssetProvider } from '../../../shared/characterRenderAssets'
+import { resolveSavedCharacterSource, characterShapeScale, type CatalogArtwork } from './characterSourceResolver'
+import { getCharacterProportions } from '../../../shared/customizer'
+import { isValidSkinTone } from '../../../shared/skinTones'
+import { prepareGachaStaticLayers } from './gachaStaticLayers'
+import { loadCachedImage } from './editorV6CharacterImageMemos'
+import { createCharacterImageTint } from './characterImageTint'
+import { createCharacterLayerRenderer } from './characterLayerRenderer'
+import { createCharacterFaceCatalogRenderer, type FaceCatalogMouthLayer } from './characterFaceCatalogRenderer'
+import { loadPreparedCharacterMaterials } from './preparedCharacterMaterials'
+import type { GachaReusableMaterialCache, GachaReusableMaterials } from './preparedCharacterMaterials'
+import { createClosedEyeAssetResolver, isRightFaceAsset as resolveIsRightFaceAsset } from './characterFaceCatalogSupport'
+import type { ClosedEyeAssetResolver } from './characterFaceCatalogSupport'
+import { createCharacterCanvas } from './canvasSurface'
+import { createGachaPairedResource, type GachaPairedResource } from './pairedCharacterPreparation'
+import { createCharacterWardrobeRenderer } from './characterWardrobeRenderer'
+import { loadStandardExpressionEffects, type StandardExpressionEffects, type StandardExpressionEffectsCache } from './standardExpressionEffects'
+import { createPreparedFaceCatalogItemLoader, type PreparedFaceCatalogItemCache } from './preparedFaceCatalogItems'
+export { loadCachedImage } from './editorV6CharacterImageMemos'
+export { withCharacterHeadSize, characterShapeScale } from './characterSourceResolver'
+export type { CatalogArtwork } from './characterSourceResolver'
+export type { GachaReusableMaterialCache, GachaReusableMaterials }
+
+export { loadStandardExpressionEffects }
+export type { StandardExpressionEffects, StandardExpressionEffectsCache }
+
+export const isRightFaceAsset = resolveIsRightFaceAsset
+
+export type { HairTintOptions } from './characterImageTint'
+
+const characterImageTint = createCharacterImageTint(loadCachedImage)
+export const loadHairTintedImage = characterImageTint.loadHairTintedImage
+export const loadCharacterTintedImage = characterImageTint.loadCharacterTintedImage
+export const loadSkinTintedImage = characterImageTint.loadSkinTintedImage
+export const loadModelBodyTintedImage = characterImageTint.loadModelBodyTintedImage
+
+const characterFaceCatalogRenderer = createCharacterFaceCatalogRenderer(
+  { loadCachedImage, loadCharacterTintedImage, loadHairTintedImage, loadSkinTintedImage },
+  (mode) => isEditorV6BlinkRenderMode(mode)
+)
+
+export type { HairCatalogSide } from './characterLayerRenderer'
+
+const characterLayerRenderer = createCharacterLayerRenderer({ loadCachedImage, loadCharacterTintedImage, loadHairTintedImage, loadSkinTintedImage, loadModelBodyTintedImage })
+export const customizerHairParts = characterLayerRenderer.customizerHairParts
+export const hairAppearanceStyleId = characterLayerRenderer.hairAppearanceStyleId
+export const loadHairAppearanceLayers = characterLayerRenderer.loadHairAppearanceLayers
+export const resolvedHairColors = characterLayerRenderer.resolvedHairColors
+export const renderArtwork = characterLayerRenderer.renderArtwork
+export const renderArtworkWithHair = characterLayerRenderer.renderArtworkWithHair
+export const renderFrontHairOverlay = characterLayerRenderer.renderFrontHairOverlay
+export const renderFaceOverlay = characterLayerRenderer.renderFaceOverlay
+export type { AdjustmentPreviewHighlight, ClothingGroupCategory, SelectedWardrobeComponent } from './characterWardrobeRenderer'
+
+const characterWardrobeRenderer = createCharacterWardrobeRenderer({ loadCachedImage, loadCharacterTintedImage, loadHairTintedImage, loadSkinTintedImage, loadModelBodyTintedImage })
+export const inspectCharacterPalette = characterImageTint.inspectCharacterPalette
+export const clothingCategories = characterWardrobeRenderer.clothingCategories
+export const wardrobeComponentsForGroup = characterWardrobeRenderer.wardrobeComponentsForGroup
+export const renderWardrobeOverlayCanvases = characterWardrobeRenderer.renderWardrobeOverlayCanvases
+export const renderWardrobeOverlay = characterWardrobeRenderer.renderWardrobeOverlay
+
+export type GachaPreparedWardrobePair = GachaPairedResource<Awaited<ReturnType<typeof renderWardrobeOverlayCanvases>>>
+export function createPreparedGachaWardrobePair(): GachaPreparedWardrobePair {
+  return createGachaPairedResource<Awaited<ReturnType<typeof renderWardrobeOverlayCanvases>>>()
+}
+
+export function drawFaceCatalogOverlay(context: CanvasRenderingContext2D, artwork: CatalogArtwork, source: FabricatorProject, items: Partial<Record<FaceSheetKind | FaceElementKind, FaceCatalogItem>>, appearance: CustomizerFaceAppearance, skinTone?: string, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode, resolveClosedEye?: ClosedEyeAssetResolver, headOverrides: CustomizerCharacter['customization']['partOverrides'] = {}, highlightedHeadId?: string | null, assetProvider: CharacterRenderAssetProvider = window.desktop.fabricator, wardrobePalettes?: Partial<Record<CustomizerWardrobePaletteKey, CharacterColorOverrides>>, mouthLayer: FaceCatalogMouthLayer = 'all', eyesAboveRearHairContext?: CanvasRenderingContext2D): Promise<void> {
+  return characterFaceCatalogRenderer.drawFaceCatalogOverlay(context, artwork, source, items, appearance, skinTone, studioFaceTransforms, expressionEffects, studioFaceMode, resolveClosedEye, headOverrides, highlightedHeadId, assetProvider, wardrobePalettes, mouthLayer, eyesAboveRearHairContext)
+}
+
+/**
+ * GPU-ready compositing pieces of a prepared Gacha pose. The lower and upper
+ * layers are immutable until the pose itself changes, while face is a mutable
+ * Canvas surface reused for each expression; consume before rendering again.
+ */
+export type PreparedGachaLayerFrame = Readonly<{
+  behindFace: HTMLCanvasElement
+  face: HTMLCanvasElement
+  posteriorHair: HTMLCanvasElement | null
+  inFrontOfFace: HTMLCanvasElement | null
+  eyesAboveRearHair: HTMLCanvasElement | null
+  width: number
+  height: number
+  outputWidth: number
+  outputHeight: number
+  shapeScaleX: number
+  shapeScaleY: number
+}>
+
+type EditorV6CharacterRendererSource = {
+  artwork: CatalogArtwork
+  source: FabricatorProject
+  assetProvider?: CharacterRenderAssetProvider
+  materialCache?: GachaReusableMaterialCache
+  wardrobePair?: GachaPreparedWardrobePair
+  expressionEffectsCache?: StandardExpressionEffectsCache
+  faceCatalogItemsCache?: PreparedFaceCatalogItemCache
+}
+
+export async function materialsForPreparedCharacter(
+  character: CustomizerCharacter, slot: number, assetProvider: CharacterRenderAssetProvider,
+  cache?: GachaReusableMaterialCache,
+): Promise<GachaReusableMaterials> {
+  return loadPreparedCharacterMaterials(character, slot, assetProvider, loadHairAppearanceLayers, cache)
+}
+
+export async function prepareSavedCharacterRenderer(character: CustomizerCharacter, renderSource?: EditorV6CharacterRendererSource): Promise<{ width: number; height: number; render: (appearance?: CustomizerFaceAppearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode, options?: { mouthLayer?: FaceCatalogMouthLayer }) => Promise<{ dataUrl: string; width: number; height: number }>; renderToCanvas: (appearance?: CustomizerFaceAppearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode, options?: { mouthLayer?: FaceCatalogMouthLayer }) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number }>; renderMouthToCanvas: (appearance?: CustomizerFaceAppearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number }>; canIsolateMouth: (appearance?: CustomizerFaceAppearance) => boolean; renderToCanvasWithLayers: (appearance?: CustomizerFaceAppearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode, options?: { mouthLayer?: FaceCatalogMouthLayer }) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number; layers: PreparedGachaLayerFrame }>; renderLayersToCanvas: (appearance?: CustomizerFaceAppearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode, options?: { mouthLayer?: FaceCatalogMouthLayer }) => Promise<PreparedGachaLayerFrame> ; dispose: () => void }> {
+  const { modelSlot, assetProvider, source, artwork } = await resolveSavedCharacterSource(character, renderSource)
+  const proportions = getCharacterProportions(character.customization)
+  const hairAppearance = character.customization.hairAppearance
+  const skinTone = isValidSkinTone(character.customization.modelSkinTone) ? character.customization.modelSkinTone : source.modelSkinTone
+  const outlineColor = isValidSkinTone(character.customization.modelOutlineColor) ? character.customization.modelOutlineColor : source.modelOutlineColor
+  const appearanceSource = { ...source, modelOutlineColor: outlineColor }
+  const materials = await materialsForPreparedCharacter(character, modelSlot, assetProvider, renderSource?.materialCache)
+  const { backStyles, posteriorStyles, fringeStyles } = materials
+  const baseImage = createCharacterCanvas()
+  baseImage.width = artwork.width
+  baseImage.height = artwork.height
+  const baseContext = baseImage.getContext('2d')
+  if (!baseContext) throw new Error(`Não foi possível montar a prévia de ${character.name}.`)
+  await renderArtworkWithHair(artwork, appearanceSource, backStyles, Math.max(artwork.width, artwork.height), skinTone, hairAppearance, baseContext, character.customization.partOverrides)
+
+  const groups = (character.customization.wardrobeGroups ?? []).filter((group) => group.modelSlot === modelSlot)
+  // Both renderers of the SAME character+pose (normal and hairless) draw the
+  // same clothes. Share the original, immutable wardrobe paintings just until
+  // both rigs have composed their own static body layers; never share the
+  // mutable output character canvases or any asset between exports.
+  const prepareWardrobe = () => renderWardrobeOverlayCanvases(groups, materials.wardrobeDetails, artwork, modelSlot, appearanceSource, skinTone,
+    undefined, undefined, character.customization.shoesBehindShinClothing === true)
+  const wardrobe = await (renderSource?.wardrobePair ? renderSource.wardrobePair.load(prepareWardrobe) : prepareWardrobe())
+
+  const appearance = character.customization.faceAppearance
+  const loadFaceCatalogItem = createPreparedFaceCatalogItemLoader(modelSlot, assetProvider, renderSource?.faceCatalogItemsCache)
+  const expressionEffectsByIndex = appearance?.modelSlot === modelSlot
+    ? await loadStandardExpressionEffects(modelSlot, assetProvider, renderSource?.expressionEffectsCache).catch((): StandardExpressionEffects => ({}))
+    : {}
+  let faceItems: Partial<Record<FaceSheetKind | FaceElementKind, FaceCatalogItem>> = {}
+  let faceCatalogSummariesPromise: Promise<FaceCatalogItemSummary[]> | null = null
+  const resolveClosedEye = createClosedEyeAssetResolver(modelSlot, assetProvider)
+  let legacyFaceUrl: string | null = null
+  if (appearance?.modelSlot === modelSlot) {
+    const hasCatalogFaceSelection = Boolean(appearance.eyeCatalogId || appearance.eyeLeftCatalogId || appearance.eyeRightCatalogId || appearance.eyebrowCatalogId || appearance.eyebrowLeftCatalogId || appearance.eyebrowRightCatalogId || appearance.noseCatalogId || appearance.mouthClosedCatalogId || appearance.mouthOpenCatalogId || Object.values(appearance.components ?? {}).some((component) => component?.assetId))
+    if (hasCatalogFaceSelection) {
+      const selections: Array<[FaceSheetKind | FaceElementKind, string | undefined]> = [
+        ['eyes', appearance.eyeCatalogId], ['eyebrows', appearance.eyebrowCatalogId], ['nose', appearance.noseCatalogId],
+        ['eye-left', appearance.eyeLeftCatalogId ?? undefined], ['eye-right', appearance.eyeRightCatalogId ?? undefined], ['brow-left', appearance.eyebrowLeftCatalogId ?? undefined], ['brow-right', appearance.eyebrowRightCatalogId ?? undefined],
+        ['mouth-closed', appearance.mouthClosedCatalogId], ['mouth-open', appearance.mouthOpenCatalogId]
+      ]
+      const entries = await Promise.all(selections.filter((entry): entry is [FaceSheetKind | FaceElementKind, string] => Boolean(entry[1])).map(async ([category, id]) => [category, await loadFaceCatalogItem(id)] as const))
+      for (const [category, item] of entries) if (item) faceItems[category] = item
+    } else if (appearance.setId) {
+      const face = await assetProvider.loadFaceSet(modelSlot, appearance.setId)
+      if (face) legacyFaceUrl = await renderFaceOverlay(artwork, source, face, appearance)
+    }
+  }
+  const posteriorHairImage = posteriorStyles.length ? createCharacterCanvas() : null
+  if (posteriorHairImage) {
+    posteriorHairImage.width = artwork.width
+    posteriorHairImage.height = artwork.height
+    const posteriorContext = posteriorHairImage.getContext('2d')
+    if (!posteriorContext) throw new Error('Não foi possível preparar o cabelo posterior do personagem.')
+    await renderFrontHairOverlay(artwork, source, posteriorStyles, Math.max(artwork.width, artwork.height), hairAppearance, posteriorContext, character.customization.partOverrides)
+  }
+  const fringeImage = fringeStyles.length ? createCharacterCanvas() : null
+  if (fringeImage) {
+    fringeImage.width = artwork.width
+    fringeImage.height = artwork.height
+    const fringeContext = fringeImage.getContext('2d')
+    if (!fringeContext) throw new Error('Não foi possível preparar a franja do personagem.')
+    await renderFrontHairOverlay(artwork, source, fringeStyles, Math.max(artwork.width, artwork.height), hairAppearance, fringeContext, character.customization.partOverrides)
+  }
+  // Direct Canvas-to-Canvas composition avoids two expensive PNG encode/decode
+  // cycles for every interpolated pose, preserving the *same pixel buffers*.
+  const wardrobeImage = wardrobe.canvas
+  const wardrobeAboveHairImage = wardrobe.aboveHairCanvas
+  const legacyFaceImage = legacyFaceUrl ? await loadCachedImage(legacyFaceUrl) : null
+  const canvas = createCharacterCanvas()
+  canvas.width = Math.max(1, artwork.width)
+  canvas.height = Math.max(1, artwork.height)
+  const context = canvas.getContext('2d')
+  if (context) configureCharacterSampling(context)
+  if (!context) throw new Error('Não foi possível preparar a imagem do personagem.')
+  // These canvases are exclusively owned by this prepared rig.
+  // Compose onto them in place: no duplicate full-size Canvas buffers.
+  const rigLayers = prepareGachaStaticLayers(baseImage, wardrobeImage, posteriorHairImage, fringeImage, wardrobeAboveHairImage,
+    { adoptSourceCanvases: true })
+  const shapeScale = characterShapeScale(proportions)
+  const outputWidth = Math.max(canvas.width, Math.ceil(canvas.width * shapeScale.x))
+  const outputHeight = Math.max(canvas.height, Math.ceil(canvas.height * shapeScale.y))
+  /**
+   * Share the exact eye/mouth/pupil/blink/effect implementation between the
+   * legacy all-in-one Canvas and the GPU-ready layered compositor.
+   * Only the drawing target changes. No second face calibration pipeline.
+   */
+  const paintPreparedFace = async (
+    targetContext: CanvasRenderingContext2D,
+    currentAppearance: CustomizerFaceAppearance | undefined = appearance,
+    studioFaceTransforms?: EditorV6FaceTransforms,
+    expressionEffects?: FaceExpressionEffects,
+    studioFaceMode?: EditorV6FaceRenderMode,
+    mouthLayer: FaceCatalogMouthLayer = 'all',
+    eyesAboveRearHairContext?: CanvasRenderingContext2D
+  ): Promise<void> => {
+    let faceAppearance = currentAppearance && studioFaceMode ? {
+      ...currentAppearance,
+      eyeState: isEditorV6BlinkRenderMode(studioFaceMode) ? 2 as const : currentAppearance.eyeState === 1 ? 1 as const : 0 as const,
+      mouthOpen: studioFaceMode === 'talk' || studioFaceMode === 'talk-blink'
+    } : currentAppearance
+    if ((studioFaceMode === 'talk' || studioFaceMode === 'talk-blink') && faceAppearance && !faceAppearance.mouthOpenCatalogId) {
+      faceCatalogSummariesPromise ??= assetProvider.listFaceCatalog(modelSlot)
+      const catalog = await faceCatalogSummariesPromise
+      const mouthOpenCatalogId = resolveEditorV6TalkMouthId(faceAppearance, catalog)
+      if (mouthOpenCatalogId) faceAppearance = { ...faceAppearance, mouthOpenCatalogId }
+    }
+    if (faceAppearance?.modelSlot === modelSlot) {
+      const selections: Array<[FaceSheetKind | FaceElementKind, string | undefined]> = [
+        ['eyes', faceAppearance.eyeCatalogId], ['eyebrows', faceAppearance.eyebrowCatalogId], ['nose', faceAppearance.noseCatalogId],
+        ['eye-left', faceAppearance.eyeLeftCatalogId ?? undefined], ['eye-right', faceAppearance.eyeRightCatalogId ?? undefined], ['brow-left', faceAppearance.eyebrowLeftCatalogId ?? undefined], ['brow-right', faceAppearance.eyebrowRightCatalogId ?? undefined],
+        ['mouth-closed', faceAppearance.mouthClosedCatalogId], ['mouth-open', faceAppearance.mouthOpenCatalogId]
+      ]
+      const hasCatalogFaceSelection = selections.some(([, id]) => Boolean(id)) || Object.values(faceAppearance.components ?? {}).some((component) => component?.assetId)
+      const hasFaceOverlaySelection = Object.values(faceAppearance.faceDetails ?? {}).some(Boolean) || Object.values(faceAppearance.headExtras ?? {}).some(Boolean)
+      if (isEditorV6BlinkRenderMode(studioFaceMode) && !hasCatalogFaceSelection && !legacyFaceImage) throw new Error('Blink precisa dos assets faciais separados do catálogo de rosto ou de Olhos Dev.')
+      const activeItems: Partial<Record<FaceSheetKind | FaceElementKind, FaceCatalogItem>> = {}
+      const neededSelections = selections.filter(([category]) => mouthLayer === 'all'
+        || (mouthLayer === 'mouth-only' ? category === 'mouth-closed' || category === 'mouth-open' : category !== 'mouth-closed' && category !== 'mouth-open'))
+      await Promise.all(neededSelections.filter((entry): entry is [FaceSheetKind | FaceElementKind, string] => Boolean(entry[1])).map(async ([category, id]) => {
+        let item = faceItems[category]?.id === id ? faceItems[category] : null
+        if (!item) {
+          item = await loadFaceCatalogItem(id) ?? null
+          if (item) faceItems[category] = item
+        }
+        if (item) activeItems[category] = item
+      }))
+      if (mouthLayer !== 'without-mouth' && (studioFaceMode === 'talk' || studioFaceMode === 'talk-blink') && !activeItems['mouth-open']?.pieces.some((piece) => piece.sheet === 'mouth-open' && piece.index === faceAppearance.expressionIndex)) {
+        throw new Error('Não encontrei uma boca aberta para esta variante. Selecione uma folha de bocas abertas em Rosto Dev.')
+      }
+      const mouthEffects = expressionEffects ?? expressionEffectsByIndex[faceAppearance.expressionIndex]
+      if (mouthLayer === 'mouth-only' && !faceAppearance.mouthClosedCatalogId && !faceAppearance.mouthOpenCatalogId) return
+      if (mouthLayer === 'all' && !hasCatalogFaceSelection && legacyFaceImage && faceAppearance.setId === appearance?.setId) targetContext.drawImage(legacyFaceImage, 0, 0, canvas.width, canvas.height)
+      if (hasCatalogFaceSelection || hasFaceOverlaySelection) await drawFaceCatalogOverlay(targetContext, artwork, source, activeItems, faceAppearance, skinTone, studioFaceTransforms, mouthEffects, studioFaceMode, resolveClosedEye, character.customization.partOverrides, undefined, assetProvider, character.customization.wardrobePalettes, mouthLayer, eyesAboveRearHairContext)
+    } else if (mouthLayer === 'all' && legacyFaceImage) targetContext.drawImage(legacyFaceImage, 0, 0, canvas.width, canvas.height)
+  }
+  // The default Canvas/PNG preview never needs an extra facial buffer.
+  // Create it lazily only when the experimental GPU layer path is selected.
+  let faceLayer: HTMLCanvasElement | null = null
+  let faceContext: CanvasRenderingContext2D | null = null
+  const ensureFaceLayer = () => {
+    if (!faceLayer) {
+      const prepared = createCharacterCanvas()
+      prepared.width = canvas.width
+      prepared.height = canvas.height
+      const context = prepared.getContext('2d')
+      if (!context) throw new Error('Não foi possível preparar a camada dinâmica do rosto.')
+      faceLayer = prepared
+      faceContext = context
+    }
+    return { faceLayer, faceContext: faceContext! }
+  }
+  let eyesAboveRearHairLayer: HTMLCanvasElement | null = null
+  let eyesAboveRearHairContext: CanvasRenderingContext2D | null = null
+  const ensureEyesAboveRearHairLayer = () => {
+    if (!eyesAboveRearHairLayer) {
+      const prepared = createCharacterCanvas()
+      prepared.width = canvas.width
+      prepared.height = canvas.height
+      const context = prepared.getContext('2d')
+      if (!context) throw new Error('Não foi possível preparar a camada elevada dos olhos.')
+      eyesAboveRearHairLayer = prepared
+      eyesAboveRearHairContext = context
+    }
+    return { layer: eyesAboveRearHairLayer, context: eyesAboveRearHairContext! }
+  }
+  /**
+   * Preview-only layered output. Caller must paint/snapshot mutable face and
+   * raised-eye layers before another call; static hair layers stay stable
+   * for the lifetime of this prepared pose. Does not change the exact Canvas
+   * render path or the serialized EditorV6Document.
+   */
+  const renderLayersToCanvas = async (
+    currentAppearance: CustomizerFaceAppearance | undefined = appearance,
+    studioFaceTransforms?: EditorV6FaceTransforms,
+    expressionEffects?: FaceExpressionEffects,
+    studioFaceMode?: EditorV6FaceRenderMode,
+    options?: { mouthLayer?: FaceCatalogMouthLayer }
+  ) => {
+    const { faceLayer, faceContext } = ensureFaceLayer()
+    faceContext.clearRect(0, 0, faceLayer.width, faceLayer.height)
+    const raisedEyes = currentAppearance?.eyesAboveRearHair && options?.mouthLayer !== 'mouth-only' ? ensureEyesAboveRearHairLayer() : null
+    raisedEyes?.context.clearRect(0, 0, raisedEyes.layer.width, raisedEyes.layer.height)
+    await paintPreparedFace(faceContext, currentAppearance, studioFaceTransforms, expressionEffects, studioFaceMode, options?.mouthLayer, raisedEyes?.context)
+    return {
+      behindFace: rigLayers.behindFace,
+      face: faceLayer,
+      posteriorHair: rigLayers.posteriorHair,
+      inFrontOfFace: rigLayers.inFrontOfFace,
+      eyesAboveRearHair: raisedEyes?.layer ?? null,
+      width: canvas.width, height: canvas.height,
+      outputWidth, outputHeight,
+      shapeScaleX: shapeScale.x, shapeScaleY: shapeScale.y,
+    }
+  }
+  // A facial-only 60 FPS sequence should never allocate a fresh proportion
+  // surface each frame. One prepared pose owns one reusable output buffer;
+  // callers snapshot a frame before advancing the next one.
+  let scaledOutput: HTMLCanvasElement | null = null
+  let scaledContext: CanvasRenderingContext2D | null = null
+  const renderToCanvas = async (currentAppearance: CustomizerFaceAppearance | undefined = appearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode, options?: { mouthLayer?: FaceCatalogMouthLayer }) => {
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(rigLayers.behindFace, 0, 0, canvas.width, canvas.height)
+    const raisedEyes = currentAppearance?.eyesAboveRearHair && options?.mouthLayer !== 'mouth-only' ? ensureEyesAboveRearHairLayer() : null
+    raisedEyes?.context.clearRect(0, 0, raisedEyes.layer.width, raisedEyes.layer.height)
+    await paintPreparedFace(context, currentAppearance, studioFaceTransforms, expressionEffects, studioFaceMode, options?.mouthLayer, raisedEyes?.context)
+    if (rigLayers.posteriorHair) context.drawImage(rigLayers.posteriorHair, 0, 0, canvas.width, canvas.height)
+    if (raisedEyes) context.drawImage(raisedEyes.layer, 0, 0, canvas.width, canvas.height)
+    if (rigLayers.inFrontOfFace) context.drawImage(rigLayers.inFrontOfFace, 0, 0, canvas.width, canvas.height)
+    if (shapeScale.x === 1 && shapeScale.y === 1) return { canvas, width: canvas.width, height: canvas.height }
+    if (!scaledOutput) {
+      scaledOutput = createCharacterCanvas()
+      scaledOutput.width = outputWidth
+      scaledOutput.height = outputHeight
+      scaledContext = scaledOutput.getContext('2d')
+      if (!scaledContext) throw new Error('Não foi possível aplicar as proporções do personagem.')
+    }
+    const outputContext = scaledContext!
+    outputContext.save()
+    outputContext.setTransform(1, 0, 0, 1, 0, 0)
+    outputContext.clearRect(0, 0, outputWidth, outputHeight)
+    outputContext.translate(outputWidth / 2, outputHeight / 2)
+    outputContext.scale(shapeScale.x, shapeScale.y)
+    outputContext.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
+    outputContext.restore()
+    return { canvas: scaledOutput, width: outputWidth, height: outputHeight }
+  }
+  /**
+   * Export-only dual output. Paint expensive facial components exactly once on
+   * the reusable transparent face layer, then composite the same layer into
+   * the full body buffer. The normal Editor/Fabricator preview path is unchanged.
+   */
+  const renderToCanvasWithLayers = async (...args: Parameters<typeof renderLayersToCanvas>) => {
+    const layers = await renderLayersToCanvas(...args)
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(layers.behindFace, 0, 0, canvas.width, canvas.height)
+    context.drawImage(layers.face, 0, 0, canvas.width, canvas.height)
+    if (layers.posteriorHair) context.drawImage(layers.posteriorHair, 0, 0, canvas.width, canvas.height)
+    if (layers.eyesAboveRearHair) context.drawImage(layers.eyesAboveRearHair, 0, 0, canvas.width, canvas.height)
+    if (layers.inFrontOfFace) context.drawImage(layers.inFrontOfFace, 0, 0, canvas.width, canvas.height)
+    if (shapeScale.x === 1 && shapeScale.y === 1) return { canvas, width: canvas.width, height: canvas.height, layers }
+    if (!scaledOutput) {
+      scaledOutput = createCharacterCanvas()
+      scaledOutput.width = outputWidth
+      scaledOutput.height = outputHeight
+      scaledContext = scaledOutput.getContext('2d')
+      if (!scaledContext) throw new Error('Não foi possível aplicar as proporções do personagem.')
+    }
+    const outputContext = scaledContext!
+    outputContext.save()
+    outputContext.setTransform(1, 0, 0, 1, 0, 0)
+    outputContext.clearRect(0, 0, outputWidth, outputHeight)
+    outputContext.translate(outputWidth / 2, outputHeight / 2)
+    outputContext.scale(shapeScale.x, shapeScale.y)
+    outputContext.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
+    outputContext.restore()
+    return { canvas: scaledOutput, width: outputWidth, height: outputHeight, layers }
+  }
+  const canIsolateMouth = (currentAppearance: CustomizerFaceAppearance | undefined = appearance) => Boolean(
+    currentAppearance?.modelSlot === modelSlot && (currentAppearance.mouthClosedCatalogId || currentAppearance.mouthOpenCatalogId)
+  )
+  let mouthOnlyLayer: HTMLCanvasElement | null = null, mouthOnlyContext: CanvasRenderingContext2D | null = null
+  let scaledMouthOutput: HTMLCanvasElement | null = null, scaledMouthContext: CanvasRenderingContext2D | null = null
+  const renderMouthToCanvas = async (currentAppearance: CustomizerFaceAppearance | undefined = appearance, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode) => {
+    if (!canIsolateMouth(currentAppearance)) throw Error('A animação isolada precisa de uma peça de boca separada no catálogo facial.')
+    if (!mouthOnlyLayer) {
+      mouthOnlyLayer = createCharacterCanvas(); mouthOnlyLayer.width = canvas.width; mouthOnlyLayer.height = canvas.height
+      mouthOnlyContext = mouthOnlyLayer.getContext('2d')
+      if (!mouthOnlyContext) throw Error('Não foi possível preparar a peça isolada da boca.')
+      configureCharacterSampling(mouthOnlyContext)
+    }
+    mouthOnlyContext!.clearRect(0, 0, canvas.width, canvas.height)
+    await paintPreparedFace(mouthOnlyContext!, currentAppearance, studioFaceTransforms, expressionEffects, studioFaceMode, 'mouth-only')
+    if (shapeScale.x === 1 && shapeScale.y === 1) return { canvas: mouthOnlyLayer, width: canvas.width, height: canvas.height }
+    if (!scaledMouthOutput) {
+      scaledMouthOutput = createCharacterCanvas(); scaledMouthOutput.width = outputWidth; scaledMouthOutput.height = outputHeight
+      scaledMouthContext = scaledMouthOutput.getContext('2d')
+      if (!scaledMouthContext) throw Error('Não foi possível aplicar a proporção à peça isolada da boca.')
+      configureCharacterSampling(scaledMouthContext)
+    }
+    const outputContext = scaledMouthContext!
+    outputContext.setTransform(1, 0, 0, 1, 0, 0); outputContext.clearRect(0, 0, outputWidth, outputHeight)
+    outputContext.save(); outputContext.translate(outputWidth / 2, outputHeight / 2); outputContext.scale(shapeScale.x, shapeScale.y)
+    outputContext.drawImage(mouthOnlyLayer, -mouthOnlyLayer.width / 2, -mouthOnlyLayer.height / 2); outputContext.restore()
+    return { canvas: scaledMouthOutput, width: outputWidth, height: outputHeight }
+  }
+  const render = async (...args: Parameters<typeof renderToCanvas>) => {
+    const value = await renderToCanvas(...args)
+    return { dataUrl: value.canvas.toDataURL('image/png'), width: value.width, height: value.height }
+  }
+  const dispose = () => {
+    for (const surface of new Set([baseImage, posteriorHairImage, fringeImage, wardrobeImage, wardrobeAboveHairImage, canvas, rigLayers.behindFace, rigLayers.posteriorHair, rigLayers.inFrontOfFace, faceLayer, eyesAboveRearHairLayer, scaledOutput, mouthOnlyLayer, scaledMouthOutput])) {
+      if (surface) { surface.width = 1; surface.height = 1 }
+    }
+  }
+  return { width: outputWidth, height: outputHeight, render, renderToCanvas, renderMouthToCanvas, canIsolateMouth, renderLayersToCanvas, renderToCanvasWithLayers, dispose }
+}
+
+export async function renderSavedCharacter(character: CustomizerCharacter, studioFaceTransforms?: EditorV6FaceTransforms, expressionEffects?: FaceExpressionEffects, studioFaceMode?: EditorV6FaceRenderMode): Promise<{ dataUrl: string; width: number; height: number }> {
+  const renderer = await prepareSavedCharacterRenderer(character)
+  try { return await renderer.render(character.customization.faceAppearance, studioFaceTransforms, expressionEffects, studioFaceMode) }
+  finally { renderer.dispose() }
+}

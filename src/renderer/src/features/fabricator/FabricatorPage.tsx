@@ -1,0 +1,926 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { FabricatorHistoryAction, FabricatorHistoryState, FabricatorProject, FabricatorSlotSummary, ModelPart } from '../../../../shared/fabricator'
+import { Icon } from '../../ui/components/Icon'
+import { usePreviewBackground } from '../../ui/hooks/usePreviewBackground'
+import { modelRigSegmentKind, normalizeLayerOrder, orderedParts, reorderLayer } from './models/rig'
+import { connectFabricatorParts, isTorsoPart, moveFabricatorPartBranch, rotateFabricatorPartBranch, toggleFabricatorJointFixed } from './models/rigEditing'
+import { buildFabricatorJointMarkers } from './models/jointMarkerModel'
+import { createFabricatorCanvasInteraction, type AnchorDragState, type DragState, type PanState } from './canvasInteraction'
+import { type FabricatorModelCanvasProps } from './FabricatorModelCanvas'
+import { type FabricatorModelPanelProps, type FabricatorPanelTab } from './FabricatorModelPanel'
+import { FabricatorModelWorkspace } from './FabricatorModelWorkspace'
+import { FabricatorSectionNavigation, type FabricatorSectionId } from './FabricatorSectionNavigation'
+import { FabricatorWorkspaceRouter } from './FabricatorWorkspaceRouter'
+import { resizeHeadPart } from './models/resize'
+import { ModelSourceEditor } from './ModelSourceEditor'
+import { broadcastModelSourceUpdate } from './models/modelSourceEvents'
+import { splitImage, mergeImages } from './models/partImages'
+import { appendImportCleanupError, createProcessedImageImportResult } from './models/processedImageImportResult'
+import { startChromaAdjustWorker, ChromaAdjustTaskError, type ChromaAdjustTask } from './models/runChromaAdjustWorker'
+import { startImageProcessorWorker, ImageProcessorTaskError, type ImageProcessorTask } from './models/runImageProcessorWorker'
+import { serializeFabricatorProject } from './models/projectSerialization'
+import { createFabricatorProjectSaveCoordinator } from './projectSaveCoordinator'
+import { duplicateFabricatorSlot } from './duplicateFabricatorSlot'
+import { deleteFabricatorSlotCommand } from './deleteFabricatorSlotCommand'
+import { selectFabricatorSlotCommand } from './selectFabricatorSlotCommand'
+import { publishModelSourceResult } from './models/publishModelSourceResult'
+import { useFabricatorHistory } from './useFabricatorHistory'
+import { prepareLoadedFabricatorProject } from './models/projectHydration'
+import { loadFabricatorSlotForEditing } from './models/loadFabricatorSlotForEditing'
+import { type ModelSourceResult } from './models/modelSource'
+import { ModelSkinContourEditor } from './ModelSkinContourEditor'
+import { MaleTorsoEditorModal } from './MaleTorsoEditorModal'
+import { DuplicateModelDialog } from './DuplicateModelDialog'
+import { connectBodyContourJoints } from './models/contourJoints'
+import { ModelAppearanceProvider } from './ModelAppearanceContext'
+import { useFabricatorModelAppearance } from './useFabricatorModelAppearance'
+import { useFabricatorModelAppearancePreviews } from './useFabricatorModelAppearancePreviews'
+import { useFabricatorSeamMixer } from './useFabricatorSeamMixer'
+import { flushPendingRendererWrites, registerPendingWriteFlusher } from '../../ui/pendingPersistence'
+// Several workspaces share selectors; preserve their availability before any
+// lazy workspace mounts, regardless of the order in which areas are opened.
+import './wardrobe/wardrobe.css'
+import './face/face-components.css'
+import './face/head-extras.css'
+
+const DEFAULT_CHROMA_TOLERANCE = 74
+
+export function FabricatorPage() {
+  const [previewBackground] = usePreviewBackground()
+  const [activeSection, setActiveSection] = useState<FabricatorSectionId>('Modelos')
+  const [slots, setSlots] = useState<FabricatorSlotSummary[]>(Array.from({ length: 10 }, () => null))
+  const [slotsLoaded, setSlotsLoaded] = useState(false)
+  const [slotSwitching, setSlotSwitching] = useState(false)
+  const [activeSlot, setActiveSlot] = useState(1)
+  const [project, setProject] = useState<FabricatorProject | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [processing, setProcessing] = useState(false)
+  const [chromaApplying, setChromaApplying] = useState(false)
+  const [modelSourceOpen, setModelSourceOpen] = useState(false)
+  const [maleTorsoEditorOpen, setMaleTorsoEditorOpen] = useState(false)
+  const [skinContourEditorOpen, setSkinContourEditorOpen] = useState(false)
+  const [modelSourcePublishing, setModelSourcePublishing] = useState(false)
+  const [duplicateModalOpen, setDuplicateModalOpen] = useState(false)
+  const [duplicateTargetSlot, setDuplicateTargetSlot] = useState<number | null>(null)
+  const [duplicatingModel, setDuplicatingModel] = useState(false)
+  const [duplicateError, setDuplicateError] = useState('')
+  const [chromaValue, setChromaValue] = useState(DEFAULT_CHROMA_TOLERANCE)
+  const [deletingSlot, setDeletingSlot] = useState<number | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
+  const [error, setError] = useState('')
+  const [filter, setFilter] = useState('')
+  const [connectMode, setConnectMode] = useState(false)
+  const [connectFromId, setConnectFromId] = useState<string | null>(null)
+  const [contourConnecting, setContourConnecting] = useState(false)
+  const [jointConnectMessage, setJointConnectMessage] = useState('')
+  const [panelTab, setPanelTab] = useState<FabricatorPanelTab>('parts')
+  const [layerDragId, setLayerDragId] = useState<string | null>(null)
+  const [showJointPivots, setShowJointPivots] = useState(true)
+  const [mixerActive, setMixerActive] = useState(false)
+  const [mixerPainting, setMixerPainting] = useState(false)
+  const [thighDeformationActive, setThighDeformationActive] = useState(false)
+  const [temporaryThighDeformationIds, setTemporaryThighDeformationIds] = useState<Set<string>>(() => new Set())
+  const [thighDeformationRadius, setThighDeformationRadius] = useState(28)
+  const [thighDeformationStrength, setThighDeformationStrength] = useState(70)
+  const [temporaryThighResetToken, setTemporaryThighResetToken] = useState(0)
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [panning, setPanning] = useState(false)
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+  const [renamingPartId, setRenamingPartId] = useState<string | null>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const projectRef = useRef<FabricatorProject | null>(null)
+  const dragRef = useRef<DragState | null>(null)
+  const anchorDragRef = useRef<AnchorDragState | null>(null)
+  const panRef = useRef<PanState | null>(null)
+  const layerDragRef = useRef<string | null>(null)
+  const imageProcessingTaskRef = useRef<ImageProcessorTask | null>(null)
+  const chromaTaskRef = useRef<ChromaAdjustTask | null>(null)
+  const requestId = useRef(0)
+  const slotSelectionGeneration = useRef(0)
+  const dirtyAssets = useRef<Map<string, string>>(new Map())
+  const dirtyChromaBases = useRef<Map<string, string>>(new Map())
+  const initialSlotLoad = useRef(false)
+  const cancelImageProcessingTask = useCallback(() => {
+    const task = imageProcessingTaskRef.current
+    imageProcessingTaskRef.current = null
+    task?.cancel()
+  }, [])
+  const cancelChromaTask = useCallback(() => {
+    const task = chromaTaskRef.current
+    chromaTaskRef.current = null
+    task?.cancel()
+  }, [])
+  const {
+    history, historyBusy, clearHistory, replaceHistory,
+    recordHistorySnapshot, startHistoryGesture, finishHistoryGesture,
+    resetHistoryGesture, trackProjectChange, restoreHistory
+  } = useFabricatorHistory({
+    projectRef, dirtyAssets, dirtyChromaBases,
+    setProject, setSelectedIds, setSaveState, setError, setSlots,
+    processing, chromaApplying
+  })
+
+  const projectSaveCoordinator = useMemo(() => createFabricatorProjectSaveCoordinator({
+    projectRef, dirtyAssets, dirtyChromaBases,
+    saveProject: (serialized, changedAssets) => window.desktop.fabricator.saveFabricatorProject(serialized, changedAssets),
+    setSaveState,
+    setError,
+    onProjectSaved: (snapshot) => {
+      window.dispatchEvent(new Event('fabricator:assets-updated'))
+      setSlots((items) => items.map((item, index) => index + 1 === snapshot.slot
+        ? { slot: snapshot.slot, name: snapshot.name, sourceName: snapshot.sourceName, partCount: snapshot.parts.length, updatedAt: snapshot.updatedAt }
+        : item))
+    }
+  }), [])
+  const { persistProject, flushProjectWrites, cancelScheduledSave, waitForProjectWrites } = projectSaveCoordinator
+
+  useEffect(() => registerPendingWriteFlusher(flushProjectWrites), [flushProjectWrites])
+
+  const { appearanceProject, appearanceLoadError, setAppearanceTargetSlot } = useFabricatorModelAppearance({ activeSection, activeSlot, project })
+  const bodyAppearancePreviewUrls = useFabricatorModelAppearancePreviews(appearanceProject, setError)
+
+  useEffect(() => {
+    void window.desktop.fabricator.listFabricatorSlots()
+      .then((items) => { setSlots(items); setSlotsLoaded(true) })
+      .catch((reason: unknown) => { setSlotsLoaded(true); setError(reason instanceof Error ? reason.message : 'Não foi possível abrir a biblioteca.') })
+    return () => {
+      requestId.current += 1
+      cancelImageProcessingTask()
+      cancelChromaTask()
+    }
+  }, [cancelChromaTask, cancelImageProcessingTask])
+
+  useEffect(() => { projectRef.current = project }, [project])
+
+  useEffect(() => { if (!project) setSkinContourEditorOpen(false) }, [project])
+
+  useEffect(() => {
+    if (activeSection !== 'Modelos') return
+    const element = stageRef.current
+    if (!element) return
+    const measure = () => {
+      const bounds = element.getBoundingClientRect()
+      setStageSize((previous) => previous.width === bounds.width && previous.height === bounds.height ? previous : { width: bounds.width, height: bounds.height })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => { observer.disconnect() }
+  }, [activeSection, project])
+
+  useEffect(() => projectSaveCoordinator.scheduleSave(project), [project, projectSaveCoordinator])
+
+  useEffect(() => {
+    if (connectMode && mixerActive) setMixerActive(false)
+  }, [connectMode, mixerActive])
+
+  const selectedPartIds = selectedIds
+  const selectedPart = project?.parts.find((part) => part.id === selectedPartIds[0]) ?? null
+  const normalizedPartFilter = useMemo(() => filter.toLowerCase(), [filter])
+  const visibleParts = useMemo(() => (project?.parts ?? []).filter((part) => part.name.toLowerCase().includes(normalizedPartFilter)), [project, normalizedPartFilter])
+  const canvasParts = useMemo(() => project ? orderedParts(project.parts, project.layerOrder) : [], [project])
+  const partPreviewSource = (part: ModelPart) => bodyAppearancePreviewUrls[`${project?.slot}:${part.id}`] ?? part.dataUrl
+  const canDeformThigh = Boolean(project?.parts.some((part) => modelRigSegmentKind(part.name) === 'thigh'))
+  const updateTemporaryThighDeformation = useCallback((partId: string, warped: boolean) => {
+    setTemporaryThighDeformationIds((current) => {
+      if (current.has(partId) === warped) return current
+      const next = new Set(current)
+      if (warped) next.add(partId)
+      else next.delete(partId)
+      return next
+    })
+  }, [])
+  const reportTemporaryThighError = useCallback((message: string) => setError(message), [])
+  const resetTemporaryThighDeformation = useCallback(() => {
+    setTemporaryThighResetToken((current) => current + 1)
+    setTemporaryThighDeformationIds(new Set())
+  }, [])
+  const toggleThighDeformation = useCallback(() => {
+    if (!thighDeformationActive) {
+      setMixerActive(false)
+      setConnectMode(false)
+      setConnectFromId(null)
+    }
+    setThighDeformationActive(!thighDeformationActive)
+  }, [thighDeformationActive])
+  const frontToBackLayers = useMemo(() => canvasParts.slice().reverse(), [canvasParts])
+  const jointMarkers = useMemo(() => project
+    ? buildFabricatorJointMarkers(project.parts, project.joints, selectedIds)
+    : [], [project?.parts, project?.joints, selectedIds])
+  const hiddenPartIds = project?.hiddenPartIds ?? []
+  const measuredWidth = Math.max(stageSize.width, stageRef.current?.clientWidth ?? 0)
+  const measuredHeight = Math.max(stageSize.height, stageRef.current?.clientHeight ?? 0)
+  const scale = project ? Math.max(0.05, Math.min((measuredWidth - 48) / project.width, (measuredHeight - 48) / project.height)) * zoom : 1
+  const toModelPoint = useCallback((clientX: number, clientY: number) => {
+    const stage = stageRef.current
+    if (!stage || !project || scale <= 0) return null
+    const rect = stage.getBoundingClientRect()
+    const x = clientX - rect.left - stage.clientLeft
+    const y = clientY - rect.top - stage.clientTop
+    return {
+      x: (x - stage.clientWidth / 2 - pan.x) / scale + project.width / 2,
+      y: (y - stage.clientHeight / 2 - pan.y) / scale + project.height / 2
+    }
+  }, [pan.x, pan.y, project?.height, project?.width, scale])
+
+  const updateProject = (updater: (current: FabricatorProject) => FabricatorProject, action: FabricatorHistoryAction = 'edit') => {
+    const current = projectRef.current
+    if (!current) return
+    const next = updater(current)
+    if (next === current) return
+    const validIds = new Set(next.parts.map((part) => part.id))
+    const normalized: FabricatorProject = {
+      ...next,
+      layerOrder: normalizeLayerOrder(next.parts, next.layerOrder),
+      hiddenPartIds: (next.hiddenPartIds ?? []).filter((id) => validIds.has(id)),
+      joints: next.joints.filter((joint) => validIds.has(joint.parentPartId) && validIds.has(joint.childPartId)),
+      updatedAt: new Date().toISOString()
+    }
+    projectRef.current = normalized
+    setProject(normalized)
+    trackProjectChange(current, normalized, action)
+  }
+
+  const moveLayer = (partId: string, direction: -1 | 1) => {
+    updateProject((current) => {
+      const topDown = normalizeLayerOrder(current.parts, current.layerOrder).reverse()
+      const index = topDown.indexOf(partId)
+      const nextIndex = index + direction
+      if (index < 0 || nextIndex < 0 || nextIndex >= topDown.length) return current
+      ;[topDown[index], topDown[nextIndex]] = [topDown[nextIndex], topDown[index]]
+      return { ...current, layerOrder: topDown.reverse() }
+    })
+  }
+
+  const dropLayer = (sourceId: string, targetId: string) => {
+    updateProject((current) => ({ ...current, layerOrder: reorderLayer(normalizeLayerOrder(current.parts, current.layerOrder).reverse(), sourceId, targetId).reverse() }))
+  }
+
+  const toggleLayerVisibility = (partId: string) => updateProject((current) => {
+    const hidden = new Set(current.hiddenPartIds ?? [])
+    if (hidden.has(partId)) hidden.delete(partId)
+    else hidden.add(partId)
+    return { ...current, hiddenPartIds: Array.from(hidden) }
+  })
+
+  const selectSlot = async (slot: number) => {
+    await selectFabricatorSlotCommand({
+      slot,
+      summary: slots[slot - 1] ?? null,
+      nextGeneration: () => ++slotSelectionGeneration.current,
+      isCurrent: (generation) => generation === slotSelectionGeneration.current,
+      setSwitching: setSlotSwitching,
+      invalidatePendingWork: () => {
+        requestId.current += 1
+        cancelImageProcessingTask()
+        cancelChromaTask()
+        setProcessing(false); setProgress(0); setChromaApplying(false)
+      },
+      getCurrentProject: () => projectRef.current ?? project,
+      persistCurrentProject: async (projectToSave) => { cancelScheduledSave(); await persistProject(projectToSave) },
+      onSaveFailure: (reason) => setError(reason instanceof Error ? `Falha ao salvar antes de trocar de slot: ${reason.message}` : 'Falha ao salvar antes de trocar de slot.'),
+      resetSlotSession: (targetSlot) => {
+        seamMixer.resetSession()
+        resetHistoryGesture()
+        clearHistory()
+        projectRef.current = null
+        setActiveSlot(targetSlot); setProject(null); setSelectedIds([]); setError(''); dirtyAssets.current.clear(); dirtyChromaBases.current.clear(); setMixerActive(false); setMixerPainting(false); setZoom(1); setPan({ x: 0, y: 0 })
+      },
+      onRecoveryRequired: (targetSlot) => {
+        setActiveSection('Modelos')
+        setError(`O slot ${targetSlot} tem mais de uma cópia de recuperação válida, então o app não escolheu nenhuma automaticamente. Use “Excluir recuperação” somente se quiser apagar todas as cópias deste slot.`)
+      },
+      loadSnapshot: (targetSlot, isCurrent) => loadFabricatorSlotForEditing(targetSlot, {
+        loadProject: (requestedSlot) => window.desktop.fabricator.loadFabricatorSlot(requestedSlot),
+        loadHistory: (requestedSlot) => window.desktop.fabricator.loadFabricatorHistory(requestedSlot),
+        isCurrent,
+        onHistoryLoadFailure: () => setError('O modelo abriu, mas o histórico persistido não pôde ser carregado.'),
+        replaceHistory,
+        prepareProject: prepareLoadedFabricatorProject
+      }),
+      applySnapshot: ({ loaded, prepared }) => {
+        for (const [partId, dataUrl] of prepared.dirtyAssets) dirtyAssets.current.set(partId, dataUrl)
+        for (const [partId, dataUrl] of prepared.dirtyChromaBases) dirtyChromaBases.current.set(partId, dataUrl)
+        if (prepared.warning) setError(prepared.warning)
+        const loadedProject = prepared.project
+        projectRef.current = loadedProject
+        setProject(loadedProject); setSelectedIds(loaded.parts[0] ? [loaded.parts[0].id] : [])
+        setChromaValue(loaded.tolerance)
+      },
+      onLoadFailure: (reason) => setError(reason instanceof Error ? reason.message : 'Falha ao abrir modelo.')
+    })
+  }
+
+  useEffect(() => {
+    if (!slotsLoaded || initialSlotLoad.current) return
+    initialSlotLoad.current = true
+    if (slots[0]) void selectSlot(1)
+  }, [slotsLoaded, slots[0]])
+
+  const deleteSlot = async (slot: number) => {
+    await deleteFabricatorSlotCommand({
+      slot,
+      summary: slots[slot - 1],
+      activeSlot,
+      deletionInProgress: deletingSlot !== null,
+      confirm: (message) => window.confirm(message),
+      setDeletingSlot,
+      invalidateActiveProject: () => {
+        slotSelectionGeneration.current += 1
+        requestId.current += 1
+        cancelScheduledSave()
+        cancelImageProcessingTask()
+        cancelChromaTask(); setChromaApplying(false)
+        setProcessing(false); setProgress(0)
+      },
+      waitForProjectWrites,
+      deleteSlot: (targetSlot) => window.desktop.fabricator.deleteFabricatorSlot(targetSlot),
+      removeSlotSummary: () => setSlots((current) => current.map((item, index) => index === slot - 1 ? null : item)),
+      clearActiveProject: () => {
+        projectRef.current = null
+        setProcessing(false); setProgress(0); setProject(null); setSelectedIds([]); dirtyAssets.current.clear(); dirtyChromaBases.current.clear(); setError('')
+      },
+      setError,
+      getCurrentProject: () => projectRef.current ?? project,
+      restoreActiveProject: (restored) => { projectRef.current = restored; setProject(restored) },
+      reloadActiveSlot: (targetSlot) => selectSlot(targetSlot),
+      now: () => new Date().toISOString()
+    })
+  }
+
+  const openDuplicateModelDialog = () => {
+    const source = projectRef.current ?? project
+    if (!source) return
+    const firstEmptySlot = slots.findIndex((summary, index) => !summary && index + 1 !== source.slot)
+    setDuplicateTargetSlot(firstEmptySlot < 0 ? null : firstEmptySlot + 1)
+    setDuplicateError('')
+    setDuplicateModalOpen(true)
+  }
+
+  const duplicateModel = async () => {
+    const source = projectRef.current ?? project
+    const targetSlot = duplicateTargetSlot
+    await duplicateFabricatorSlot({
+      source,
+      targetSlot,
+      targetOccupied: targetSlot === null ? false : Boolean(slots[targetSlot - 1]),
+      cancelScheduledSave,
+      persistProject,
+      duplicateSlot: (sourceSlot, target) => window.desktop.fabricator.duplicateFabricatorSlot(sourceSlot, target),
+      setBusy: setDuplicatingModel,
+      setError: setDuplicateError,
+      setSlotSummary: (summary) => setSlots((current) => current.map((item, index) => index + 1 === summary.slot ? summary : item)),
+      broadcastAssetsUpdated: () => window.dispatchEvent(new Event('fabricator:assets-updated')),
+      closeDialog: () => setDuplicateModalOpen(false),
+      clearTargetSlot: () => setDuplicateTargetSlot(null),
+      now: () => new Date().toISOString()
+    })
+  }
+
+  const discardImportedSource = async (slot: number, sourceAssetName: string, generation: number) => {
+    try {
+      await window.desktop.fabricator.discardImportedFabricatorSource(slot, sourceAssetName)
+      return null
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason)
+      if (generation !== slotSelectionGeneration.current) console.error('Não foi possível limpar uma imagem de importação não usada.', reason)
+      return message
+    }
+  }
+  const runProcessor = (
+    sourceDataUrl: string,
+    tolerance: number,
+    metadata: { slot: number; name: string; sourceName: string; sourceAssetName: string },
+    recordBefore?: FabricatorProject,
+    importedSource?: { sourceAssetName: string; generation: number }
+  ) => {
+    const id = ++requestId.current
+    cancelImageProcessingTask()
+    const task = startImageProcessorWorker({ id, sourceDataUrl, tolerance }, setProgress)
+    imageProcessingTaskRef.current = task
+    setProcessing(true); setProgress(1); setError('')
+    const discardUncommittedSource = () => importedSource
+      ? discardImportedSource(metadata.slot, importedSource.sourceAssetName, importedSource.generation)
+      : Promise.resolve(null)
+    void task.result.then(async (message) => {
+      if (id !== requestId.current) { await discardUncommittedSource(); return }
+      if (imageProcessingTaskRef.current === task) imageProcessingTaskRef.current = null
+      setProcessing(false)
+      const outcome = await createProcessedImageImportResult(
+        message,
+        sourceDataUrl,
+        tolerance,
+        metadata,
+        discardUncommittedSource
+      )
+      if (outcome.kind === 'failed') {
+        setError(outcome.message)
+        return
+      }
+      const imported = outcome.imported
+      for (const [partId, dataUrl] of imported.dirtyAssets) dirtyAssets.current.set(partId, dataUrl)
+      for (const [partId, dataUrl] of imported.dirtyChromaBases) dirtyChromaBases.current.set(partId, dataUrl)
+      if (recordBefore) recordHistorySnapshot(recordBefore, 'reset', imported.project)
+      setChromaValue(tolerance)
+      projectRef.current = imported.project
+      setProject(imported.project); setSelectedIds(imported.project.parts[0] ? [imported.project.parts[0].id] : [])
+    }, async (reason: unknown) => {
+      if (id !== requestId.current) { await discardUncommittedSource(); return }
+      if (imageProcessingTaskRef.current === task) imageProcessingTaskRef.current = null
+      setProcessing(false)
+      if (reason instanceof ImageProcessorTaskError && reason.kind === 'cancelled') {
+        const cleanupError = await discardUncommittedSource()
+        if (cleanupError) setError(appendImportCleanupError('A importação foi cancelada.', cleanupError))
+        return
+      }
+      const cleanupError = await discardUncommittedSource()
+      setError(appendImportCleanupError(reason instanceof ImageProcessorTaskError && reason.kind === 'worker' ? reason.message : 'O processamento da imagem falhou.', cleanupError))
+    }).catch((reason: unknown) => {
+      if (id === requestId.current) setError(reason instanceof Error ? reason.message : 'Não foi possível concluir a importação do modelo.')
+    })
+  }
+
+
+  const publishEditedModelSource = async (result: ModelSourceResult): Promise<void> => {
+    return publishModelSourceResult({
+      current: projectRef.current,
+      canPublish: !modelSourcePublishing && !processing && !chromaApplying && !historyBusy,
+      result,
+      setPublishing: setModelSourcePublishing,
+      setSaveState,
+      cancelScheduledSave,
+      persistProject,
+      serializeProject: serializeFabricatorProject,
+      publish: (serialized, sourceDataUrl, changedAssets) => window.desktop.fabricator.publishFabricatorModelSource(serialized, sourceDataUrl, changedAssets),
+      clearHistory,
+      clearDirtyAssets: () => dirtyAssets.current.clear(),
+      clearDirtyChromaBases: () => dirtyChromaBases.current.clear(),
+      clearSeamSurfaces: seamMixer.clearSurfaces,
+      setProject: (published) => { projectRef.current = published; setProject(published) },
+      setChromaValue,
+      closeEditor: () => setModelSourceOpen(false),
+      broadcastModelSourceUpdate,
+      broadcastAssetsUpdated: () => window.dispatchEvent(new Event('fabricator:assets-updated')),
+      now: () => new Date().toISOString()
+    })
+  }
+
+  const applyChromaKey = () => {
+    if (!project || chromaApplying || processing || historyBusy || chromaValue === project.tolerance) return
+    const id = ++requestId.current
+    cancelChromaTask()
+    const slot = project.slot
+    const tolerance = chromaValue
+    const task = startChromaAdjustWorker({
+      id,
+      sourceDataUrl: project.sourceDataUrl,
+      tolerance,
+      parts: project.parts.map(({ id: partId, dataUrl, chromaBaseDataUrl }) => ({ id: partId, dataUrl: chromaBaseDataUrl ?? dataUrl }))
+    })
+    chromaTaskRef.current = task
+    setChromaApplying(true); setError('')
+    void task.result.then((updatedAssets) => {
+      if (id !== requestId.current) return
+      if (chromaTaskRef.current === task) chromaTaskRef.current = null
+      setChromaApplying(false)
+      for (const [partId, dataUrl] of updatedAssets) dirtyAssets.current.set(partId, dataUrl)
+      seamMixer.clearSurfaces()
+      updateProject((current) => current.slot !== slot ? current : {
+        ...current,
+        tolerance,
+        parts: current.parts.map((part) => updatedAssets.has(part.id) ? { ...part, dataUrl: updatedAssets.get(part.id)! } : part)
+      })
+    }).catch((reason: unknown) => {
+      if (id !== requestId.current) return
+      if (chromaTaskRef.current === task) chromaTaskRef.current = null
+      setChromaApplying(false)
+      if (reason instanceof ChromaAdjustTaskError && reason.kind === 'cancelled') return
+      if (reason instanceof ChromaAdjustTaskError && reason.kind === 'worker') {
+        setError(`Chroma key: ${reason.message}`)
+        return
+      }
+      setError('O ajuste do chroma key falhou. Suas posições e conexões foram preservadas.')
+    })
+  }
+
+  const resetModel = async () => {
+    if (!project || processing || chromaApplying || historyBusy) return
+    const originalName = project.sourceName.replace(/\.[^.]+$/, '') || `Modelo ${project.slot}`
+    if (!window.confirm('Resetar este modelo para a importação original? Isso vai apagar os recortes, posições, camadas, juntas e ajustes atuais.')) return
+    cancelScheduledSave()
+    setProcessing(true)
+    try {
+      await persistProject(project)
+    } catch (reason) {
+      setProcessing(false)
+      setError(reason instanceof Error ? `Não foi possível salvar antes de resetar: ${reason.message}` : 'Não foi possível salvar antes de resetar.')
+      setProject((current) => current ? { ...current, updatedAt: new Date().toISOString() } : current)
+      return
+    }
+    cancelChromaTask(); setChromaApplying(false)
+    setChromaValue(DEFAULT_CHROMA_TOLERANCE)
+    dirtyAssets.current.clear(); dirtyChromaBases.current.clear()
+    runProcessor(project.sourceDataUrl, DEFAULT_CHROMA_TOLERANCE, {
+      slot: project.slot,
+      name: originalName,
+      sourceName: project.sourceName,
+      sourceAssetName: project.sourceAssetName
+    }, project)
+  }
+
+  const importSlot = async (slot: number, preserveExisting = false) => {
+    const selectionGeneration = slotSelectionGeneration.current
+    if (slots[slot - 1]?.recoveryRequired) {
+      setError(`O slot ${slot} tem backups de recuperação ambíguos. Exclua o slot antes de importar uma nova imagem.`)
+      return
+    }
+    const reimporting = preserveExisting && Boolean(slots[slot - 1])
+    if (slots[slot - 1] && !reimporting && !window.confirm(`Substituir o modelo do slot ${slot}? O projeto atual será trocado.`)) return
+    const projectToSave = projectRef.current ?? project
+    if (projectToSave) {
+      cancelScheduledSave()
+      try { await persistProject(projectToSave) } catch (reason) { setError(reason instanceof Error ? `Falha ao salvar antes da importação: ${reason.message}` : 'Falha ao salvar antes da importação.'); return }
+    }
+    if (selectionGeneration !== slotSelectionGeneration.current) return
+    setError('')
+    let selectedSource: { sourceName: string; sourceAssetName: string; sourceDataUrl: string } | null = null
+    let sourcePersisted = false
+    let cleanupDelegated = false
+    try {
+      const selected = await window.desktop.fabricator.importFabricatorModel(slot, reimporting ? 'reimport' : 'import')
+      if (!selected) return
+      selectedSource = selected
+      if (selectionGeneration !== slotSelectionGeneration.current) {
+        await discardImportedSource(slot, selected.sourceAssetName, selectionGeneration)
+        cleanupDelegated = true
+        return
+      }
+      if (reimporting) {
+        const current = projectRef.current
+        const existing = current?.slot === slot ? current : await window.desktop.fabricator.loadFabricatorSlot(slot)
+        if (!existing) throw new Error('O modelo salvo não foi encontrado. Nenhuma configuração foi alterada.')
+        if (selectionGeneration !== slotSelectionGeneration.current) {
+          await discardImportedSource(slot, selected.sourceAssetName, selectionGeneration)
+          cleanupDelegated = true
+          return
+        }
+        const updated: FabricatorProject = {
+          ...existing,
+          sourceName: selected.sourceName,
+          sourceAssetName: selected.sourceAssetName,
+          sourceDataUrl: selected.sourceDataUrl
+        }
+        await persistProject(updated)
+        sourcePersisted = true
+        if (selectionGeneration !== slotSelectionGeneration.current) {
+          broadcastModelSourceUpdate({ slot, sourceAssetName: selected.sourceAssetName })
+          return
+        }
+        if (activeSlot !== slot || projectRef.current?.slot !== slot) {
+          let loadedHistory: FabricatorHistoryState = { undo: [], redo: [] }
+          try { loadedHistory = await window.desktop.fabricator.loadFabricatorHistory(slot) } catch {
+            if (selectionGeneration !== slotSelectionGeneration.current) return
+            setError('A imagem foi reimportada, mas não foi possível carregar o histórico salvo.')
+          }
+          if (selectionGeneration !== slotSelectionGeneration.current) return
+          replaceHistory(loadedHistory)
+          setActiveSlot(slot)
+          setSelectedIds(updated.parts[0] ? [updated.parts[0].id] : [])
+        }
+        projectRef.current = updated
+        setProject(updated)
+        setChromaValue(updated.tolerance)
+        broadcastModelSourceUpdate({ slot, sourceAssetName: selected.sourceAssetName })
+        return
+      }
+      cancelChromaTask(); setChromaApplying(false)
+      seamMixer.resetSession()
+      projectRef.current = null
+      setActiveSlot(slot); setProject(null); setSelectedIds([]); dirtyAssets.current.clear(); dirtyChromaBases.current.clear(); setMixerActive(false); setMixerPainting(false)
+      const name = selected.sourceName.replace(/\.[^.]+$/, '') || `Modelo ${slot}`
+      const recordBefore = project?.slot === slot ? project : undefined
+      if (!recordBefore) clearHistory()
+      runProcessor(selected.sourceDataUrl, 74, { slot, name, sourceName: selected.sourceName, sourceAssetName: selected.sourceAssetName }, recordBefore, {
+        sourceAssetName: selected.sourceAssetName,
+        generation: selectionGeneration
+      })
+      cleanupDelegated = true
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Não foi possível importar a imagem.'
+      const cleanupError = selectedSource && !sourcePersisted && !cleanupDelegated
+        ? await discardImportedSource(slot, selectedSource.sourceAssetName, selectionGeneration)
+        : null
+      setError(appendImportCleanupError(message, cleanupError))
+    }
+  }
+
+  const removePart = (partId: string) => {
+    updateProject((current) => ({ ...current, parts: current.parts.filter((part) => part.id !== partId), joints: current.joints.filter((joint) => joint.parentPartId !== partId && joint.childPartId !== partId) }))
+    setSelectedIds((current) => current.filter((id) => id !== partId))
+    dirtyAssets.current.delete(partId)
+    dirtyChromaBases.current.delete(partId)
+  }
+
+  const splitSelected = async (axis: 'horizontal' | 'vertical') => {
+    if (!selectedPart || selectedPart.rotation !== 0) return
+    const split = await splitImage(selectedPart, axis)
+    for (const part of split) { dirtyAssets.current.set(part.id, part.dataUrl); if (part.chromaBaseDataUrl) dirtyChromaBases.current.set(part.id, part.chromaBaseDataUrl) }
+    updateProject((current) => ({ ...current, parts: [...current.parts.filter((part) => part.id !== selectedPart.id), ...split], joints: current.joints.filter((joint) => joint.parentPartId !== selectedPart.id && joint.childPartId !== selectedPart.id) }))
+    setSelectedIds(split.map((part) => part.id)); dirtyAssets.current.delete(selectedPart.id)
+  }
+
+  const mergeSelected = async () => {
+    if (!project || selectedPartIds.length < 2) return
+    const parts = project.parts.filter((part) => selectedPartIds.includes(part.id))
+    const merged = await mergeImages(parts)
+    dirtyAssets.current.set(merged.id, merged.dataUrl)
+    if (merged.chromaBaseDataUrl) dirtyChromaBases.current.set(merged.id, merged.chromaBaseDataUrl)
+    const ids = new Set(parts.map((part) => part.id))
+    updateProject((current) => ({ ...current, parts: [...current.parts.filter((part) => !ids.has(part.id)), merged], joints: current.joints.filter((joint) => !ids.has(joint.parentPartId) && !ids.has(joint.childPartId)) }))
+    for (const id of ids) { dirtyAssets.current.delete(id); dirtyChromaBases.current.delete(id) }
+    setSelectedIds([merged.id])
+  }
+
+  const handlePartClick = (partId: string, toggle = false) => {
+    if (connectMode) {
+      if (!connectFromId) { setConnectFromId(partId); setSelectedIds([partId]); return }
+      if (connectFromId !== partId && project) {
+        updateProject((current) => connectFabricatorParts(current, connectFromId, partId, () => crypto.randomUUID()))
+        setConnectFromId(null); setConnectMode(false); setSelectedIds([partId]); return
+      }
+    }
+    setSelectedIds((current) => toggle
+      ? current.includes(partId) ? current.filter((id) => id !== partId) : [...current, partId]
+      : [partId])
+  }
+
+  const updatePartPosition = (partId: string, dx: number, dy: number) => updateProject((current) => moveFabricatorPartBranch(current, partId, dx, dy))
+
+  const setPartCoordinate = (partId: string, axis: 'x' | 'y', rawValue: string) => {
+    updateProject((current) => {
+      const target = current.parts.find((part) => part.id === partId)
+      if (!target || isTorsoPart(target)) return current
+      return { ...current, parts: current.parts.map((part) => part.id === partId ? { ...part, [axis]: Number(rawValue) || 0 } : part) }
+    })
+  }
+
+  const toggleJointFix = (partId: string) => updateProject((current) => toggleFabricatorJointFixed(current, partId, () => crypto.randomUUID()))
+
+  const rotateBranch = (jointId: string, amount: number) => updateProject((current) => rotateFabricatorPartBranch(current, jointId, amount))
+
+  const autoConnectBodyContours = async () => {
+    const snapshot = projectRef.current
+    if (!snapshot || contourConnecting) return
+    setContourConnecting(true)
+    setJointConnectMessage('')
+    try {
+      const result = await connectBodyContourJoints(snapshot)
+      if (projectRef.current !== snapshot) {
+        setJointConnectMessage('O modelo mudou durante o cálculo. Execute a conexão automática novamente.')
+        return
+      }
+      updateProject(() => result.project)
+      setJointConnectMessage(result.pairCount
+        ? `Juntas automáticas concluídas: ${result.alignedCount} de ${result.pairCount} contornos anatômicos alinhados.`
+        : 'Não encontrei pares identificáveis de braço superior/antebraço ou coxa/canela.')
+    } catch (reason) {
+      setJointConnectMessage(reason instanceof Error ? reason.message : 'Não foi possível conectar os contornos das juntas.')
+    } finally {
+      setContourConnecting(false)
+    }
+  }
+
+  const seamMixer = useFabricatorSeamMixer({
+    stageRef,
+    projectRef,
+    dirtyAssets,
+    scale,
+    pan,
+    setMixerPainting,
+    startHistoryGesture,
+    updateProject,
+    setError
+  })
+
+  const canvasInteraction = createFabricatorCanvasInteraction({
+    project, dragRef, anchorDragRef, panRef, mixerStrokeRef: seamMixer.mixerStrokeRef,
+    setSelectedIds, connectMode, mixerActive, thighDeformationActive, pan,
+    setPan, setPanning, setMixerPainting, scale, mixerQueueRef: seamMixer.mixerQueueRef,
+    startHistoryGesture, finishHistoryGesture, updateProject, updatePartPosition,
+    startMixerStroke: seamMixer.startMixerStroke, moveMixerStroke: seamMixer.moveMixerStroke
+  })
+
+  const duplicateDestinationSlots = slots.flatMap((summary, index) =>
+    !summary && index + 1 !== project?.slot ? [index + 1] : []
+  )
+
+  const modelCanvas: FabricatorModelCanvasProps | null = project ? {
+    project,
+    stageRef,
+    previewBackground,
+    canvasParts,
+    hiddenPartIds,
+    selectedIds,
+    connectFromId,
+    jointMarkers,
+    scale,
+    pan,
+    zoom,
+    panning,
+    mixerActive,
+    mixerPainting,
+    thighDeformationActive,
+    showJointPivots,
+    thighDeformationRadius,
+    thighDeformationStrength,
+    temporaryThighResetToken,
+    canvasInteraction,
+    partPreviewSource,
+    toModelPoint,
+    onPartClick: handlePartClick,
+    onSelectPart: (partId) => setSelectedIds([partId]),
+    onWarpStateChange: updateTemporaryThighDeformation,
+    onWarpError: reportTemporaryThighError,
+    onZoomIn: () => setZoom((value) => Math.min(5, value + 0.15)),
+    onZoomOut: () => setZoom((value) => Math.max(0.5, value - 0.15)),
+    onCenter: () => { setZoom(1); setPan({ x: 0, y: 0 }) }
+  } : null
+
+  const modelPanel: FabricatorModelPanelProps | null = project ? {
+    project,
+    panelTab,
+    filter,
+    visibleParts,
+    selectedPart,
+    selectedIds,
+    frontToBackLayers,
+    hiddenPartIds,
+    layerDragId,
+    renamingPartId,
+    connectMode,
+    contourConnecting,
+    jointConnectMessage,
+    processing,
+    chromaApplying,
+    historyBusy,
+    modelSourcePublishing,
+    partPreviewSource,
+    actions: {
+      addSheet: (slot) => { void importSlot(slot) },
+      setTab: setPanelTab,
+      setFilter,
+      handlePartClick,
+      rename: {
+        begin: setRenamingPartId,
+        update: (partId, name) => updateProject((current) => ({ ...current, parts: current.parts.map((part) => part.id === partId ? { ...part, name } : part) })),
+        finish: () => setRenamingPartId(null)
+      },
+      transform: {
+        setCoordinate: setPartCoordinate,
+        setRotation: (partId, value) => updateProject((current) => ({ ...current, parts: current.parts.map((part) => part.id === partId ? { ...part, rotation: Number(value) || 0 } : part) })),
+        restoreHeadSize: (partId) => updateProject((current) => resizeHeadPart(resizeHeadPart(current, partId, 'width', 100), partId, 'height', 100)),
+        setHeadSize: (partId, axis, value) => updateProject((current) => resizeHeadPart(current, partId, axis, value)),
+        startGesture: () => startHistoryGesture('edit'),
+        finishGesture: finishHistoryGesture
+      },
+      removePart,
+      splitSelected,
+      mergeSelected,
+      layers: {
+        dragRef: layerDragRef,
+        setDragging: setLayerDragId,
+        drop: dropLayer,
+        select: (partId) => setSelectedIds([partId]),
+        move: moveLayer,
+        toggleFix: toggleJointFix,
+        toggleVisibility: toggleLayerVisibility
+      },
+      joints: {
+        autoConnect: () => { void autoConnectBodyContours() },
+        toggleConnectMode: () => { setConnectMode((value) => !value); setConnectFromId(null) },
+        rotateBranch,
+        disconnect: (jointId) => updateProject((current) => ({ ...current, joints: current.joints.filter((joint) => joint.id !== jointId) }))
+      }
+    }
+  } : null
+
+  return (
+    <main className="fabricator-layout" aria-label="Fabricador Dev" aria-busy={!slotsLoaded}>
+      <aside className="fabricator-sidebar">
+        <div className="fabricator-sidebar-heading">
+          <span className="fabricator-heading-icon"><Icon name="box" /></span>
+          <span><strong>Fabricador Dev</strong><small>ÁREAS DE PRODUÇÃO</small></span>
+        </div>
+        <FabricatorSectionNavigation
+          activeSection={activeSection}
+          recoveryRequired={Boolean(slots[activeSlot - 1]?.recoveryRequired)}
+          onSelect={(section) => {
+            void flushPendingRendererWrites().then(() => {
+              setActiveSection(section); setAppearanceTargetSlot(activeSlot)
+              if (section !== 'Modelos') { setThighDeformationActive(false); setTemporaryThighDeformationIds(new Set()) }
+            }).catch((reason: unknown) => setError(reason instanceof Error ? `Não foi possível salvar antes de trocar de área: ${reason.message}` : 'Não foi possível salvar antes de trocar de área.'))
+          }}
+        />
+      </aside>
+
+      {modelSourceOpen && project && <ModelSourceEditor project={project} onClose={() => { if (!modelSourcePublishing) setModelSourceOpen(false) }} onPublish={publishEditedModelSource} />}
+      {maleTorsoEditorOpen && project && project.parts.find(isTorsoPart) && <MaleTorsoEditorModal
+        key={`${project.slot}:male-torso`}
+        project={project}
+        baseTorso={project.parts.find(isTorsoPart)!}
+        savedTorso={project.maleTorso}
+        onClose={() => setMaleTorsoEditorOpen(false)}
+        onSave={async (maleTorso) => {
+          await flushProjectWrites()
+          const current = projectRef.current
+          if (!current || current.slot !== project.slot) throw new Error('O modelo mudou antes de salvar o tronco masculino. Reabra o editor e tente novamente.')
+          dirtyAssets.current.set(maleTorso.id, maleTorso.dataUrl)
+          updateProject((latest) => ({ ...latest, maleTorso, updatedAt: new Date().toISOString() }))
+          const next = projectRef.current
+          if (!next) throw new Error('O projeto foi fechado antes de salvar o tronco masculino.')
+          await persistProject(next)
+          setMaleTorsoEditorOpen(false)
+        }}
+      />}
+      {duplicateModalOpen && project && <DuplicateModelDialog
+        modelName={project.name}
+        sourceSlot={project.slot}
+        destinationSlots={duplicateDestinationSlots}
+        targetSlot={duplicateTargetSlot}
+        busy={duplicatingModel}
+        error={duplicateError}
+        onSelectSlot={(slot) => { setDuplicateTargetSlot(slot); setDuplicateError('') }}
+        onCancel={() => setDuplicateModalOpen(false)}
+        onDuplicate={() => void duplicateModel()}
+      />}
+      {skinContourEditorOpen && project && <ModelSkinContourEditor key={project.slot} parts={project.parts} skinTone={project.modelSkinTone} outlineColor={project.modelOutlineColor} onClose={() => setSkinContourEditorOpen(false)} onSave={(contoursByPart) => updateProject(current => ({ ...current, parts: current.parts.map(part => {
+        if (!(part.id in contoursByPart)) return part
+        const fakeSkinContours = contoursByPart[part.id]
+        return { ...part, fakeSkinContours: fakeSkinContours.length ? fakeSkinContours : undefined }
+      }) }))} />}
+      <ModelAppearanceProvider slot={appearanceProject?.slot ?? null} previewUrls={bodyAppearancePreviewUrls} modelSkinTone={appearanceProject?.modelSkinTone} modelOutlineColor={appearanceProject?.modelOutlineColor} setTargetSlot={setAppearanceTargetSlot}>
+        <section className="fabricator-workspace-shell">
+          {activeSection !== 'Modelos' && appearanceLoadError && <small className="fabricator-appearance-error" role="status">Não foi possível carregar a prévia do modelo base: {appearanceLoadError}</small>}
+          <FabricatorWorkspaceRouter
+            activeSection={activeSection}
+            activeSlot={activeSlot}
+            modelWorkspace={(
+              <FabricatorModelWorkspace
+                slots={slots}
+                activeSlot={activeSlot}
+                project={project}
+                slotSwitching={slotSwitching}
+                deletingSlot={deletingSlot}
+                processing={processing}
+                progress={progress}
+                chromaApplying={chromaApplying}
+                historyBusy={historyBusy}
+                modelSourcePublishing={modelSourcePublishing}
+                maleTorsoSaved={Boolean(project?.maleTorso)}
+                saveState={saveState}
+                history={history}
+                chromaValue={chromaValue}
+                showJointPivots={showJointPivots}
+                mixerActive={mixerActive}
+                thighDeformationActive={thighDeformationActive}
+                hasTemporaryThighDeformation={temporaryThighDeformationIds.size > 0}
+                canDeformThigh={canDeformThigh}
+                thighDeformationRadius={thighDeformationRadius}
+                thighDeformationStrength={thighDeformationStrength}
+                error={error}
+                canvas={modelCanvas}
+                panel={modelPanel}
+                actions={{
+                  select: (slot) => { void selectSlot(slot) },
+                  delete: (slot) => { void deleteSlot(slot) },
+                  duplicate: openDuplicateModelDialog,
+                  import: (slot) => { void importSlot(slot, true) },
+                  undo: () => { void restoreHistory('undo') },
+                  redo: () => { void restoreHistory('redo') },
+                  chromaValueChange: setChromaValue,
+                  applyChroma: applyChromaKey,
+                  openSourceEditor: () => setModelSourceOpen(true),
+                  reset: () => { void resetModel() },
+                  toggleMixer: () => { setMixerActive((active) => !active); setConnectMode(false); setConnectFromId(null) },
+                  clearMixerStroke: () => { setMixerActive(false); void restoreHistory('undo') },
+                  toggleJointPivots: () => setShowJointPivots((visible) => !visible),
+                  toggleThighDeformation,
+                  resetTemporaryThighDeformation,
+                  thighDeformationRadiusChange: setThighDeformationRadius,
+                  thighDeformationStrengthChange: setThighDeformationStrength,
+                  selectSkinTone: (tone) => updateProject((current) => ({ ...current, modelSkinTone: tone })),
+                  selectOutlineColor: (color) => updateProject((current) => ({ ...current, modelOutlineColor: color })),
+                  editFakeContours: () => setSkinContourEditorOpen(true),
+                  openMaleTorsoEditor: () => setMaleTorsoEditorOpen(true),
+                  dismissError: () => setError('')
+                }}
+              />
+            )}
+          />
+      </section>
+      </ModelAppearanceProvider>
+    </main>
+  )
+}

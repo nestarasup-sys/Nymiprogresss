@@ -1,0 +1,411 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { IpcMain } from 'electron'
+import { join } from 'node:path'
+import { createEditorV6Timeline } from '../../src/shared/editorV6'
+import type { EditorV6MotionBakeResult } from '../../src/shared/editorV6Motion'
+import { editorV6IpcChannels } from '../../src/shared/editorV6IpcChannels'
+import { FIRST_HAIR_MOTION_PRESET } from '../../src/shared/hairMotionEngine'
+
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => 'C:/synthetic/profile') },
+  BrowserWindow: { fromWebContents: vi.fn(() => null) },
+  dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() },
+  shell: { showItemInFolder: vi.fn() }
+}))
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }) }),
+  writeFile: vi.fn(async () => undefined),
+  rename: vi.fn(async () => undefined),
+  unlink: vi.fn(async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }) }),
+  copyFile: vi.fn(),
+  mkdir: vi.fn(async () => undefined),
+  stat: vi.fn(async () => ({ size: 1024 }))
+}))
+vi.mock('../../electron/domains/editorV6/exportWorkers', () => ({
+  createEditorV6WorkerFactory: vi.fn(() => ({ create: vi.fn() }))
+}))
+vi.mock('../../electron/domains/editorV6/exportRunner', () => ({
+  runEditorV6Export: vi.fn()
+}))
+vi.mock('../../electron/domains/editorV6/exportMediaProbe', () => ({ probeExportMedia: vi.fn() }))
+
+import { dialog } from 'electron'
+import { copyFile, readFile, stat, writeFile } from 'node:fs/promises'
+import { runEditorV6Export } from '../../electron/domains/editorV6/exportRunner'
+import { probeExportMedia } from '../../electron/domains/editorV6/exportMediaProbe'
+import { registerEditorV6ExportHandlers } from '../../electron/domains/editorV6/exportIpc'
+
+const sourceId = '11111111-1111-4111-8111-111111111111'
+const targetId = '22222222-2222-4222-8222-222222222222'
+const event = { sender: { id: 12, once: vi.fn(), removeListener: vi.fn(), isDestroyed: () => false } }
+const tick = () => new Promise((resolve) => setImmediate(resolve))
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((yes) => { resolve = yes })
+  return { promise, resolve }
+}
+
+function createHarness() {
+  const handlers = new Map<string, (...args: any[]) => Promise<unknown>>()
+  const recordDiagnostic = vi.fn(async () => undefined)
+  const lifecycle = registerEditorV6ExportHandlers({
+    ipcMain: { handle: (channel, handler) => handlers.set(channel, handler as (...args: any[]) => Promise<unknown>) } as unknown as IpcMain,
+    assertTrustedSender: () => {},
+    recordDiagnostic,
+    projectPath: (id) => `C:/synthetic/editorV6-${id}`,
+    toolsDirectory: 'C:/synthetic/tools',
+    workerHtml: 'worker.html',
+    workerPreload: 'worker-preload.cjs',
+    tempRoot: 'C:/synthetic/temp',
+    getCharacters: async () => [],
+    bakeMotion: async () => ({}) as EditorV6MotionBakeResult,
+    resolveLibraryVideo: async () => ({ path: 'C:/synthetic/library.mp4', name: 'Video', mimeType: 'video/mp4', extension: 'mp4', size: 1024, durationFrames: 30 }),
+    resolveLibraryAudio: async () => ({ path: 'C:/synthetic/library.mp3', name: 'Library Audio', mimeType: 'audio/mpeg', extension: 'mp3', size: 1024 }),
+    resolveLibraryAsset: async () => ({ path: 'C:/synthetic/library.png', mimeType: 'image/png' })
+  })
+  return { handlers, lifecycle, recordDiagnostic }
+}
+
+const audioClip = {
+  id: '33333333-3333-4333-8333-333333333333',
+  name: 'Áudio sintético',
+  fileName: '33333333-3333-4333-8333-333333333333.mp3',
+  sourceFrames: 30,
+  startFrame: 0,
+  sourceInFrame: 0,
+  durationFrames: 30,
+  gain: 1,
+  muted: false
+}
+const mediaAsset = {
+  id: '44444444-4444-4444-8444-444444444444',
+  name: 'Vídeo sintético',
+  fileName: '44444444-4444-4444-8444-444444444444.mp4',
+  kind: 'video',
+  mimeType: 'video/mp4',
+  sourceFrames: 30,
+  hasAudio: false,
+  width: 320,
+  height: 180,
+  sizeBytes: 1024
+}
+const exportProject = {
+  schemaVersion: 1 as const,
+  id: sourceId,
+  title: 'Projeto sintético',
+  color: '#ffffff',
+  createdAt: '2026-10-29T12:00:00.000Z',
+  updatedAt: '2026-10-29T12:00:00.000Z',
+  backgroundColor: '#ffffff',
+  backgroundAssetId: null,
+  backgroundX: 0,
+  backgroundY: 0,
+  backgroundWidth: 100,
+  backgroundHeight: 100,
+  backgroundRotation: 0,
+  assets: [],
+  elements: [],
+  timeline: { ...createEditorV6Timeline(), durationFrames: 30 }
+}
+const exportOptions = { startFrame: 0, endFrame: 30, width: 320, height: 180, turbo: false, encoder: 'cpu' as const }
+
+type CopyScenario = {
+  name: string
+  configure?: () => void
+  start: (handlers: Map<string, (...args: any[]) => Promise<unknown>>) => Promise<unknown>
+}
+
+const copyScenarios: CopyScenario[] = [
+  {
+    name: 'import de áudio',
+    configure: () => {
+      vi.mocked(dialog.showOpenDialog).mockResolvedValue({ canceled: false, filePaths: ['C:/synthetic/input.mp3'] })
+      vi.mocked(probeExportMedia).mockResolvedValue({ streams: [{ codec_type: 'audio' }], format: { duration: '1' } } as never)
+    },
+    start: (handlers) => handlers.get(editorV6IpcChannels.importEditorV6ExportAudio)!(event, targetId)
+  },
+  {
+    name: 'cópia de áudio ao duplicar',
+    start: (handlers) => handlers.get(editorV6IpcChannels.cloneEditorV6ExportAudio)!(event, sourceId, targetId, [audioClip])
+  },
+  {
+    name: 'import de mídia da timeline',
+    start: (handlers) => handlers.get(editorV6IpcChannels.importEditorV6Media)!(event, targetId, 'video')
+  },
+  {
+    name: 'cópia de mídia ao duplicar',
+    start: (handlers) => handlers.get(editorV6IpcChannels.cloneEditorV6Media)!(event, sourceId, targetId, [mediaAsset])
+  }
+]
+
+describe('lifecycle de cópias de mídia do Editor V6', () => {
+  beforeEach(() => {
+    vi.mocked(copyFile).mockReset()
+    vi.mocked(dialog.showOpenDialog).mockReset()
+    vi.mocked(probeExportMedia).mockReset()
+    vi.mocked(dialog.showOpenDialog).mockResolvedValue({ canceled: false, filePaths: ['C:/synthetic/input.mp4'] })
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'video', width: 320, height: 180 }],
+      format: { duration: '1' }
+    } as never)
+  })
+
+  it('usa a duração da faixa de áudio quando o contêiner não informa duração', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValue({ canceled: false, filePaths: ['C:/synthetic/input.mp3'] })
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'audio', duration: '1.5' }],
+      format: {}
+    } as never)
+    const { handlers } = createHarness()
+
+    await expect(handlers.get(editorV6IpcChannels.importEditorV6ExportAudio)!(event, targetId))
+      .resolves.toMatchObject({ sourceFrames: 45, durationFrames: 45 })
+    expect(copyFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejeita duração de áudio inválida antes de copiar o arquivo', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValue({ canceled: false, filePaths: ['C:/synthetic/input.mp3'] })
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'audio' }],
+      format: {}
+    } as never)
+    const { handlers } = createHarness()
+
+    await expect(handlers.get(editorV6IpcChannels.importEditorV6ExportAudio)!(event, targetId))
+      .rejects.toThrow('A duração do áudio não pôde ser determinada.')
+    expect(copyFile).not.toHaveBeenCalled()
+  })
+
+  it('vincula áudio da biblioteca por referência e usa a duração validada', async () => {
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'audio', duration: '2' }],
+      format: {}
+    } as never)
+    const { handlers } = createHarness()
+
+    await expect(handlers.get(editorV6IpcChannels.linkEditorV6LibraryAudio)!(event, targetId, sourceId))
+      .resolves.toMatchObject({ id: sourceId, libraryAudioId: sourceId, fileName: `${sourceId}.mp3`, sourceFrames: 60, hasAudio: true })
+    expect(copyFile).not.toHaveBeenCalled()
+  })
+
+  it('cria clipe de áudio de biblioteca sem copiar a mídia ao projeto', async () => {
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'audio', duration: '2' }],
+      format: {}
+    } as never)
+    const { handlers } = createHarness()
+
+    await expect(handlers.get(editorV6IpcChannels.linkEditorV6LibraryExportAudio)!(event, targetId, sourceId))
+      .resolves.toMatchObject({ libraryAudioId: sourceId, fileName: `${sourceId}.mp3`, sourceFrames: 60, durationFrames: 60, startFrame: 0 })
+    expect(copyFile).not.toHaveBeenCalled()
+  })
+
+  it('duplica áudio e mídia locais entre as pastas dos projetos', async () => {
+    const { handlers } = createHarness()
+
+    await handlers.get(editorV6IpcChannels.cloneEditorV6ExportAudio)!(event, sourceId, targetId, [audioClip])
+    await handlers.get(editorV6IpcChannels.cloneEditorV6Media)!(event, sourceId, targetId, [mediaAsset])
+
+    expect(copyFile).toHaveBeenNthCalledWith(
+      1,
+      join(`C:/synthetic/editorV6-${sourceId}`, 'export-audio', audioClip.fileName),
+      join(`C:/synthetic/editorV6-${targetId}`, 'export-audio', audioClip.fileName)
+    )
+    expect(copyFile).toHaveBeenNthCalledWith(
+      2,
+      join(`C:/synthetic/editorV6-${sourceId}`, 'media', mediaAsset.fileName),
+      join(`C:/synthetic/editorV6-${targetId}`, 'media', mediaAsset.fileName)
+    )
+  })
+
+  it('vincula vídeo da biblioteca após validar formato e faixa de vídeo', async () => {
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'video', duration: '1', width: 320, height: 180 }],
+      format: {}
+    } as never)
+    const { handlers } = createHarness()
+
+    await expect(handlers.get(editorV6IpcChannels.linkEditorV6LibraryVideo)!(event, targetId, sourceId))
+      .resolves.toMatchObject({ id: sourceId, libraryVideoId: sourceId, fileName: `${sourceId}.mp4`, sourceFrames: 30, width: 320, height: 180 })
+    expect(copyFile).not.toHaveBeenCalled()
+  })
+
+  it.each(copyScenarios)('$name entra no inventário e o shutdown aguarda a cópia', async ({ configure, start }) => {
+    configure?.()
+    const started = deferred()
+    const copyGate = deferred()
+    vi.mocked(copyFile).mockImplementation(async () => {
+      started.resolve()
+      await copyGate.promise
+    })
+
+    const { handlers, lifecycle } = createHarness()
+    const operation = start(handlers)
+    await started.promise
+    expect(lifecycle.getPendingWrites()).toHaveLength(1)
+
+    const draining = lifecycle.drain()
+    await expect(start(handlers)).rejects.toThrow(/encerrando/)
+    copyGate.resolve()
+    await operation
+    await draining
+    expect(lifecycle.getPendingWrites()).toEqual([])
+  })
+
+  it('usa pasta fixa para exportar sem abrir diálogo e dá nome único ao MP4', async () => {
+    vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ folder: 'C:/synthetic/exports' }) as never)
+    vi.mocked(stat).mockResolvedValueOnce({ isDirectory: () => true } as never)
+    vi.mocked(dialog.showSaveDialog).mockClear()
+    const gate = deferred<Awaited<ReturnType<typeof runEditorV6Export>>>()
+    vi.mocked(runEditorV6Export).mockImplementation(() => gate.promise)
+    const { handlers } = createHarness()
+    await handlers.get(editorV6IpcChannels.startEditorV6Export)!(event, exportProject, exportOptions)
+    expect(dialog.showSaveDialog).not.toHaveBeenCalled()
+    expect(runEditorV6Export).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ outputPath: expect.stringMatching(/Projeto sintético - [0-9a-f-]{36}\.mp4$/) }))
+    gate.resolve({ outputPath: 'C:/synthetic/exports/video.mp4', fallback: false } as Awaited<ReturnType<typeof runEditorV6Export>>)
+    await tick()
+  })
+
+  it('informa quando a pasta fixa desapareceu sem iniciar exportação', async () => {
+    vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ folder: 'C:/synthetic/missing' }) as never)
+    vi.mocked(stat).mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+    const { handlers } = createHarness()
+    await expect(handlers.get(editorV6IpcChannels.startEditorV6Export)!(event, exportProject, exportOptions)).rejects.toThrow('pasta fixa de exportação não está disponível')
+  })
+
+  it('grava pasta escolhida e permite voltar ao seletor de arquivo', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: false, filePaths: ['C:/synthetic/exports'] })
+    vi.mocked(stat).mockResolvedValueOnce({ isDirectory: () => true } as never)
+    vi.mocked(writeFile).mockClear()
+    const { handlers } = createHarness()
+    expect(await handlers.get(editorV6IpcChannels.chooseEditorV6ExportFolder)!(event)).toBe('C:/synthetic/exports')
+    expect(writeFile).toHaveBeenCalledWith(expect.any(String), JSON.stringify({ folder: 'C:/synthetic/exports' }), 'utf8')
+    await handlers.get(editorV6IpcChannels.clearEditorV6ExportFolder)!(event)
+    expect(writeFile).toHaveBeenCalledWith(expect.any(String), JSON.stringify({ folder: null }), 'utf8')
+  })
+
+  it('mantém a exportação MP4 ativa no inventário até concluir os arquivos de saída e relatório', async () => {
+    const exportGate = deferred<Awaited<ReturnType<typeof runEditorV6Export>>>()
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: 'C:/synthetic/output.mp4' })
+    vi.mocked(runEditorV6Export).mockImplementation(() => exportGate.promise)
+
+    const { handlers, lifecycle } = createHarness()
+    const status = await handlers.get(editorV6IpcChannels.startEditorV6Export)!(event, exportProject, exportOptions)
+    expect(status).toMatchObject({ state: 'preparing' })
+
+    const pending = lifecycle.getPendingWrites()
+    expect(pending).toHaveLength(1)
+    let settled = false
+    void pending[0].then(() => { settled = true })
+    const draining = lifecycle.drain()
+    await tick()
+    expect(settled).toBe(false)
+
+    exportGate.resolve({ outputPath: 'C:/synthetic/output.mp4', fallback: false } as Awaited<ReturnType<typeof runEditorV6Export>>)
+    await draining
+    expect(settled).toBe(true)
+    expect(lifecycle.getPendingWrites()).toEqual([])
+  })
+
+  it('restringe o cancelamento à janela dona e registra o estado cancelado', async () => {
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: 'C:/synthetic/output.mp4' })
+    vi.mocked(runEditorV6Export).mockImplementation((_project, _options, dependencies) => new Promise((_resolve, reject) => {
+      dependencies.signal.addEventListener('abort', () => reject(dependencies.signal.reason), { once: true })
+    }))
+
+    const { handlers } = createHarness()
+    const status = await handlers.get(editorV6IpcChannels.startEditorV6Export)!(event, exportProject, exportOptions) as { id: string }
+    const cancel = handlers.get(editorV6IpcChannels.cancelEditorV6Export)!
+    const otherWindow = { ...event, sender: { ...event.sender, id: 13 } }
+
+    await expect(cancel(otherWindow, status.id)).rejects.toThrow('Exportação não encontrada nesta janela.')
+    expect(handlers.get(editorV6IpcChannels.getEditorV6ExportStatus)!(event, status.id)).toMatchObject({ state: 'preparing' })
+    await expect(cancel(event, status.id)).resolves.toBeUndefined()
+    expect(handlers.get(editorV6IpcChannels.getEditorV6ExportStatus)!(event, status.id)).toMatchObject({ state: 'cancelled' })
+  })
+
+  it('aceita no IPC de exportação projetos com mais de 500 assets', async () => {
+    const exportGate = deferred<Awaited<ReturnType<typeof runEditorV6Export>>>()
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: 'C:/synthetic/output.mp4' })
+    vi.mocked(runEditorV6Export).mockImplementation(() => exportGate.promise)
+    const assets = Array.from({ length: 501 }, (_, index) => ({
+      id: `33333333-3333-4333-8333-${String(index + 1).padStart(12, '0')}`,
+      category: 'character' as const,
+      name: `Snapshot ${index + 1}`,
+      mimeType: 'image/png' as const,
+      dataUrl: 'data:image/png;base64,AA=='
+    }))
+
+    const { handlers } = createHarness()
+    const status = await handlers.get(editorV6IpcChannels.startEditorV6Export)!(event, { ...exportProject, assets }, exportOptions)
+
+    expect(status).toMatchObject({ state: 'preparing' })
+    expect(runEditorV6Export).toHaveBeenCalledWith(expect.objectContaining({ assets: expect.arrayContaining([expect.objectContaining({ name: 'Snapshot 501' })]) }), expect.anything(), expect.anything())
+    exportGate.resolve({ outputPath: 'C:/synthetic/output.mp4', fallback: false } as Awaited<ReturnType<typeof runEditorV6Export>>)
+  })
+
+  it('registra falha do export de cabelo no Logs Dev sem vazar erro, caminho ou preset', async () => {
+    const dataUrl = 'data:image/png;base64,AA=='
+    const hairAnimation = {
+      presetSlot: 1,
+      preset: FIRST_HAIR_MOTION_PRESET,
+      surfaces: [{ id: 'base', dataUrl }, { id: 'face', dataUrl }],
+      textures: [{ id: 'hair', dataUrl }],
+      rigs: [{
+        elementId: 'actor-element', assetId: 'actor-image', characterId: 'synthetic-character', poseSlot: null,
+        baseSurfaceId: 'base', faceSurfaceId: 'face', overlaySurfaceId: null,
+        artworkWidth: 64, artworkHeight: 64, outputWidth: 64, outputHeight: 64, shapeScaleX: 1, shapeScaleY: 1,
+        sourceCrop: { left: 0, top: 0, width: 64, height: 64 }, sourceHead: { width: 32, height: 24 },
+        targetHead: { x: 16, y: 8, width: 32, height: 24, rotation: 0 },
+        layers: [{ id: 'front-layer', textureId: 'hair', side: 'front', width: 16, height: 20, x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, flipX: false, phase: 0 }]
+      }]
+    }
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: 'C:/synthetic/output.mp4' })
+    vi.mocked(runEditorV6Export).mockRejectedValueOnce(new Error('Falha em C:\\Users\\private\\project.json: preset cru e conteúdo privado'))
+
+    const { handlers, recordDiagnostic } = createHarness()
+    const status = await handlers.get(editorV6IpcChannels.startEditorV6Export)!(event, exportProject, { ...exportOptions, hairAnimationPresetSlot: 1 }, hairAnimation)
+    await tick()
+
+    expect(handlers.get(editorV6IpcChannels.getEditorV6ExportStatus)!(event, status.id)).toMatchObject({ state: 'failed' })
+    expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'editor-v6.export-failed', domain: 'editor-v6', operation: 'export.mp4', stage: 'hair-motion-export',
+      result: 'failure', correlationId: status.id,
+      message: 'A exportação MP4 falhou com a animação experimental de cabelo ativa; consulte o relatório.'
+    }))
+    const logged = JSON.stringify(recordDiagnostic.mock.calls[0]?.[0])
+    expect(logged).not.toContain('private')
+    expect(logged).not.toContain('preset cru')
+    expect(logged).not.toContain('C:/Users')
+  })
+
+  it('retoma novos imports depois de uma cópia falhar durante o shutdown', async () => {
+    const started = deferred()
+    const copyGate = deferred()
+    let copyFails = true
+    vi.mocked(copyFile).mockImplementation(async () => {
+      if (!copyFails) return
+      started.resolve()
+      await copyGate.promise
+      throw new Error('falha sintética na cópia')
+    })
+    vi.mocked(dialog.showOpenDialog).mockResolvedValue({ canceled: false, filePaths: ['C:/synthetic/input.mp3'] })
+    vi.mocked(probeExportMedia).mockResolvedValue({
+      streams: [{ codec_type: 'audio' }],
+      format: { duration: '1' }
+    } as never)
+
+    const { handlers, lifecycle } = createHarness()
+    const operation = handlers.get(editorV6IpcChannels.importEditorV6ExportAudio)!(event, targetId)
+    await started.promise
+    const draining = lifecycle.drain()
+    copyGate.resolve()
+    await expect(operation).rejects.toThrow('falha sintética na cópia')
+    await expect(draining).rejects.toThrow('falha sintética na cópia')
+
+    lifecycle.resumeAfterFailedShutdown()
+    copyFails = false
+    await expect(handlers.get(editorV6IpcChannels.importEditorV6ExportAudio)!(event, targetId)).resolves.toMatchObject({ name: 'input.mp3' })
+  })
+})

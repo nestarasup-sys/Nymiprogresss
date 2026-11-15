@@ -1,0 +1,45 @@
+import type { EditorV6DesktopApi } from './editorV6'
+
+export const editorV6IpcChannels = {
+  exportEditorV6ProjectJson: 'editor-v6:project-json:export',
+  importEditorV6ProjectJson: 'editor-v6:project-json:import',
+  listEditorV6Projects: 'editor-v6:projects:list',
+  loadEditorV6Project: 'editor-v6:projects:load',
+  saveEditorV6Project: 'editor-v6:projects:save',
+  deleteEditorV6Project: 'editor-v6:projects:delete',
+  getEditorV6Folder: 'editor-v6:folder',
+  importEditorV6Image: 'editor-v6:import-image',
+  linkEditorV6LibraryBackground: 'editor-v6:background:link-library',
+  linkEditorV6LibraryAsset: 'editor-v6:asset:link-library',
+  linkEditorV6LibraryAudio: 'editor-v6:audio:link-library',
+  linkEditorV6LibraryExportAudio: 'editor-v6:export:audio:link-library',
+  saveEditorV6Print: 'editor-v6:save-print',
+  openEditorV6Prints: 'editor-v6:open-prints',
+  getEditorV6ExportFolder: 'editor-v6:export:folder:get',
+  chooseEditorV6ExportFolder: 'editor-v6:export:folder:choose',
+  clearEditorV6ExportFolder: 'editor-v6:export:folder:clear',
+  startEditorV6Export: 'editor-v6:export:start',
+  getEditorV6ExportStatus: 'editor-v6:export:status',
+  cancelEditorV6Export: 'editor-v6:export:cancel',
+  revealEditorV6Export: 'editor-v6:export:reveal',
+  importEditorV6ExportAudio: 'editor-v6:export:import-audio',
+  cloneEditorV6ExportAudio: 'editor-v6:export:clone-audio',
+  importEditorV6Media: 'editor-v6:media:import',
+  linkEditorV6LibraryVideo: 'editor-v6:media:link-library-video',
+  cloneEditorV6Media: 'editor-v6:media:clone',
+  bakeEditorV6Motion: 'editor-v6:motion:bake',
+  prepareEditorV6Motion: 'editor-v6:motion:prepare',
+  cancelEditorV6Motion: 'editor-v6:motion:cancel'
+} as const satisfies Record<Exclude<keyof EditorV6DesktopApi, 'flushPendingWrites'>, string>
+
+export type EditorV6IpcMethod = keyof typeof editorV6IpcChannels
+export type EditorV6IpcArguments<K extends EditorV6IpcMethod> = Parameters<EditorV6DesktopApi[K]>
+export type EditorV6IpcResult<K extends EditorV6IpcMethod> = Awaited<ReturnType<EditorV6DesktopApi[K]>>
+
+export type EditorV6InvokeTransport = { invoke(channel: string, ...args: unknown[]): Promise<unknown> }
+
+export function createEditorV6Invoker(transport: EditorV6InvokeTransport) {
+  return function invoke<K extends EditorV6IpcMethod>(method: K, ...args: EditorV6IpcArguments<K>): Promise<EditorV6IpcResult<K>> {
+    return transport.invoke(editorV6IpcChannels[method], ...args) as Promise<EditorV6IpcResult<K>>
+  }
+}

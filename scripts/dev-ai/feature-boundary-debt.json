@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "owner": "G-V5 architecture review",
+  "baselineCommit": "967539f51f0779fa35309275bce075ee99df547d",
+  "policy": "Existing debt is recorded, NOT approved. No new unique edge or greater occurrence count is permitted without explicit review.",
+  "edges": []
+}

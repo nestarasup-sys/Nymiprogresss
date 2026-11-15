@@ -1,3 +1,3 @@
 @echo off
-rem Copie para porta-local.bat para sobrescrever a porta no modo legado.
+rem Copie este arquivo para porta-local.bat se quiser sobrescrever a porta local.
 set "NATIVE_GACHA_DEV_PORT=5196"

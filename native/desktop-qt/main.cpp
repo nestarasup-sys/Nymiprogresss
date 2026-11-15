@@ -1,6 +1,7 @@
 #include "AppBridge.hpp"
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlError>
 #include <QtQml>
 
 int main(int argc, char* argv[]) {
