@@ -105,14 +105,14 @@ echo.
 rem Config temporaria em node_modules (ignorada pelo Git); nao muda electron.vite.config.ts.
 set "DEV_CONFIG=node_modules\.cache\native-gacha-dev-%RANDOM%-%RANDOM%.mts"
 if not exist "node_modules\.cache" mkdir "node_modules\.cache"
-if errorlevel 1 (
+if not exist "node_modules\.cache" (
   echo Nao foi possivel preparar a configuracao temporaria.
   pause
   exit /b 1
 )
 > "%DEV_CONFIG%" echo import baseConfig from '../../electron.vite.config.ts'
 >> "%DEV_CONFIG%" echo export default { ...baseConfig, renderer: { ...baseConfig.renderer, server: { host: '127.0.0.1', port: %NATIVE_GACHA_DEV_PORT%, strictPort: true } } }
-if errorlevel 1 (
+if not exist "%DEV_CONFIG%" (
   echo Falha ao escrever a configuracao temporaria.
   del /q "%DEV_CONFIG%" >nul 2>&1
   pause

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import editorV6Guide from '../../../../../docs/editor-v6/GUIA_V14_1_NATIVE_GACHA_EDITOR_V6_JSON_REACT.md?raw'
+import editorV6Guide from '../../../../../Lixo/docs/editor-v6/GUIA_V14_1_NATIVE_GACHA_EDITOR_V6_JSON_REACT.md?raw'
 
 export function BaseVideosV6GuideModal({ onClose }: { onClose: () => void }) {
   const [notice, setNotice] = useState('')
