@@ -104,7 +104,7 @@ void AppBridge::projectData() {
 
 void AppBridge::clearVideo() {
     if (!videoSource_.isEmpty()) {
-        videoSource_ = {};
+        videoSource_ = QUrl();
         emit videoSourceChanged();
     }
     videoVerification_.clear();
