@@ -1,0 +1,54 @@
+param(
+  [Parameter(Mandatory=$true)][string]$ZipPath
+)
+$ErrorActionPreference = "Stop"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$expected = "b2d34839375ab71601933b76199762ef4d98ca5a8baca05848eb49f66b63aea4"
+function MustRunGit([string[]]$Arguments) {
+    & git @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "Git falhou: $($Arguments -join ' ')" }
+}
+try {
+  $resolvedZip = (Resolve-Path -LiteralPath $ZipPath).Path
+  $hash = (Get-FileHash -LiteralPath $resolvedZip -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($hash -ne $expected) { throw "ZIP incorreto: hash SHA-256 nao corresponde ao pacote preparado nesta conversa." }
+  Push-Location $repo
+  if (-not (Test-Path ".git")) { throw "Clone o repositorio do GitHub antes de importar." }
+  $remote = (& git remote get-url origin).Trim()
+  if ($LASTEXITCODE -ne 0 -or $remote -notmatch 'nestarasup-sys/Nymiprogresss(\.git)?$') {
+    throw "O repositorio origin nao aponta para nestarasup-sys/Nymiprogresss."
+  }
+  $branch = (& git branch --show-current).Trim()
+  if ($branch -ne "main") { throw "Use a branch main para importar." }
+  $dirty = (& git status --porcelain)
+  if ($LASTEXITCODE -ne 0 -or $dirty) { throw "Ha alteracoes locais nao salvas. Faca commit ou backup primeiro." }
+  $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("nymi-import-" + [guid]::NewGuid().ToString("N"))
+  New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
+  try {
+    Expand-Archive -LiteralPath $resolvedZip -DestinationPath $tempDir
+    foreach ($required in @("package.json", "electron/main.ts", "src/renderer/src/ui/App.tsx", "src/renderer/src/features/editorV6/EditorV6Page.tsx", "Lixo/README.md", "native/nymi-core/src/Timeline.cpp")) {
+      if (-not (Test-Path -LiteralPath (Join-Path $tempDir $required))) { throw "Arquivo obrigatorio ausente: $required" }
+    }
+    $files = Get-ChildItem -LiteralPath $tempDir -Recurse -Force -File
+    foreach ($file in $files) {
+      $relative = $file.FullName.Substring($tempDir.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
+      if ($relative -match '(^|[\\/])(app-data|node_modules|\.git|\.env)([\\/]|$)') { throw "Caminho proibido no pacote: $relative" }
+      $dest = Join-Path $repo $relative
+      New-Item -Path (Split-Path -Parent $dest) -ItemType Directory -Force | Out-Null
+      Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
+    }
+    MustRunGit @("add", "-A")
+    MustRunGit @("diff", "--cached", "--check")
+    MustRunGit @("commit", "-m", "feat: importar fonte completa com Editor V6 e todas as areas; arquivar docs")
+    Write-Host "Commit criado. Enviando ao GitHub..."
+    MustRunGit @("push", "origin", "main")
+    Write-Host "Fonte importada e publicada com sucesso."
+  } finally {
+    if (Test-Path $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
+  }
+} catch {
+  Write-Error $_
+  exit 1
+} finally {
+  Pop-Location -ErrorAction SilentlyContinue
+}

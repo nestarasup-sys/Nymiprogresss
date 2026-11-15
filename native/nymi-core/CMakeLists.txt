@@ -1,0 +1,8 @@
+add_library(nymi-core STATIC src/Timeline.cpp)
+target_include_directories(nymi-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(nymi-core PUBLIC cxx_std_20)
+if(BUILD_TESTING)
+  add_executable(nymi-core-tests tests/TimelineTest.cpp)
+  target_link_libraries(nymi-core-tests PRIVATE nymi-core)
+  add_test(NAME nymi-core-timeline COMMAND nymi-core-tests)
+endif()
