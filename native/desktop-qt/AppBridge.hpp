@@ -34,7 +34,7 @@ public:
     Q_INVOKABLE void verifyAndOpenVideo(const QString& videoId);
     Q_INVOKABLE void clearVideo();
     Q_INVOKABLE double sampleNormalizedPosition(double seconds) const;
-    FabricatorWorkspace* fabricator() { return &fabricator_; }
+    FabricatorWorkspace* fabricator() { return &fabricatorWorkspace_; }
     bool loaded() const { return bundle_.has_value(); }
     QString status() const { return status_; }
     QString bundleFolder() const { return bundle_ ? bundle_->root : QString{}; }
@@ -53,7 +53,7 @@ signals:
 private:
     void projectData();
     std::optional<nymi::NativeBundle> bundle_;
-    FabricatorWorkspace fabricator_;
+    FabricatorWorkspace fabricatorWorkspace_;
     QVariantList fabricator_;
     QVariantList characters_;
     QVariantList videos_;

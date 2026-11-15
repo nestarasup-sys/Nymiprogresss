@@ -16,6 +16,7 @@ if(BUILD_TESTING)
   add_executable(nymi-fabricator-workspace-tests
     tests/FabricatorWorkspaceTest.cpp FabricatorWorkspace.cpp FabricatorWorkspace.hpp)
   set_target_properties(nymi-fabricator-workspace-tests PROPERTIES AUTOMOC ON)
+  target_include_directories(nymi-fabricator-workspace-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(nymi-fabricator-workspace-tests PRIVATE Qt6::Core nymi-native-data nymi-fabricator)
   add_test(NAME nymi-fabricator-workspace COMMAND nymi-fabricator-workspace-tests)
 endif()
