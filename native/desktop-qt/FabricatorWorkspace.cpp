@@ -9,6 +9,7 @@
 #include <QUrl>
 #include <QSet>
 #include <cmath>
+#include <algorithm>
 
 FabricatorWorkspace::FabricatorWorkspace(QObject* parent) : QObject(parent) {}
 void FabricatorWorkspace::changedState() { emit changed(); }
@@ -22,7 +23,7 @@ void FabricatorWorkspace::setBundle(const nymi::NativeBundle& bundle) {
 }
 void FabricatorWorkspace::clearEditState() {
     working_.reset(); original_.reset(); undo_.clear(); redo_.clear();
-    gestureBefore_.reset(); selectedPartId_.clear();
+    gestureBefore_.reset(); gestureChanged_ = false; selectedPartId_.clear();
     dirty_ = false; zoom_ = 1.0; panX_ = panY_ = 0;
 }
 QVariantList FabricatorWorkspace::slots() const {
@@ -120,6 +121,7 @@ void FabricatorWorkspace::setPartPosition(const QString& id, double x, double y)
         if (part->x == x && part->y == y) return;
         beforeChange();
         part->x = x; part->y = y; dirty_ = true;
+        if (gestureBefore_) gestureChanged_ = true;
         changedState();
     }
 }
@@ -129,6 +131,7 @@ void FabricatorWorkspace::setPartRotation(const QString& id, double rotation) {
         if (part->rotation == rotation) return;
         beforeChange();
         part->rotation = rotation; dirty_ = true;
+        if (gestureBefore_) gestureChanged_ = true;
         changedState();
     }
 }
@@ -137,20 +140,21 @@ void FabricatorWorkspace::setPartVisible(const QString& id, bool visible) {
         if (part->hidden == !visible) return;
         beforeChange();
         part->hidden = !visible; dirty_ = true;
+        if (gestureBefore_) gestureChanged_ = true;
         changedState();
     }
 }
 void FabricatorWorkspace::beginGesture() {
-    if (working_ && !gestureBefore_) gestureBefore_ = *working_;
+    if (working_ && !gestureBefore_) { gestureBefore_ = *working_; gestureChanged_ = false; }
 }
 void FabricatorWorkspace::endGesture() {
     if (working_ && gestureBefore_) {
-        if (working_->parts != gestureBefore_->parts) {
+        if (gestureChanged_) {
             undo_.append(*gestureBefore_);
             if (undo_.size() > 80) undo_.removeFirst();
             redo_.clear();
         }
-        gestureBefore_.reset(); changedState();
+        gestureBefore_.reset(); gestureChanged_ = false; changedState();
     }
 }
 void FabricatorWorkspace::undo() {

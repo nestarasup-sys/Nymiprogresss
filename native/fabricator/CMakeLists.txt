@@ -1,3 +1,4 @@
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core)
 add_library(nymi-fabricator STATIC FabricatorProjectReader.cpp FabricatorProjectReader.hpp)
 target_compile_features(nymi-fabricator PUBLIC cxx_std_20)
 target_include_directories(nymi-fabricator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

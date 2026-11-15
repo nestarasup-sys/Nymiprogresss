@@ -73,4 +73,5 @@ private:
     int selectedSlot_ = 1;
     double zoom_ = 1.0, panX_ = 0.0, panY_ = 0.0;
     bool dirty_ = false;
+    bool gestureChanged_ = false;
 };

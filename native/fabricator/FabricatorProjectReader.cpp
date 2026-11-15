@@ -1,6 +1,7 @@
 #include "FabricatorProjectReader.hpp"
 #include <QDir>
 #include <QHash>
+#include <QMap>
 #include <QJsonArray>
 #include <QRegularExpression>
 #include <QSet>
