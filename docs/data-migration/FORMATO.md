@@ -12,7 +12,7 @@ native-data/
   assets/sha256/<2 primeiros hex>/<sha256 completo>
 ```
 
-`manifest.json` é UTF-8 JSON, sem BOM, serializado em UTF-8. É o índice de dados e de integridade; payloads de domínio são JSON, sem duplicar bytes de mídia. Assets são imutáveis e endereçados pelo hash SHA-256 dos bytes exatos.
+`manifest.json` é UTF-8 JSON, sem BOM, serializado em UTF-8. É o índice de dados e de integridade; payloads de domínio são JSON, sem duplicar bytes de mídia. Assets são imutáveis e endereçados pelo hash SHA-256 dos bytes exatos. A área `preservedUnknown` dentro dos dados de domínio aceita registros opaque com tabela/path/proveniência original para retenção revisável; sua existência bloqueia a importação final até haver regra de interpretação, sem impedir que o conversor os preserve.
 
 ## Manifesto v1
 

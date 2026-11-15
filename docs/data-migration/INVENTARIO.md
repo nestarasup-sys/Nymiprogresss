@@ -4,7 +4,7 @@
 
 Inventário derivado do código da aplicação Electron legado (bootstrap de app-data, catálogo SQLite, sistema de arquivos por domínio, caminhos dos domínios e chamadas de persistência no renderer). A documentação antiga não foi usada como fonte de verdade. Nenhum valor de usuário, linha SQLite, imagem ou mídia foi lido para este inventário; a inspeção física limitou-se a nomes de diretório, extensões e tamanhos agregados. O diretório legado permaneceu intocado.
 
-O raiz de dados separa `database`, `runtime/profile`, `projects`, `libraries`, `media`, `manifests` e áreas operacionais (`cache`, `logs`, `crash-dumps`, `temp`). O perfil Electron não é descartável: contém arquivos de domínio e Local Storage do Chromium. Cookies, cache de sessão, logs, crash dumps e temporários não são dados de produto e devem ser excluídos mediante regra explícita.
+`configureLocalAppDataRoot` resolve a raiz como `app-data` ao lado do `app.getAppPath()` no modo desenvolvimento e ao lado do executável empacotado em produção; nessa raiz os subdiretórios são `database`, `runtime/profile`, `projects`, `libraries`, `media`, `manifests` e áreas operacionais (`cache`, `logs`, `crash-dumps`, `temp`). O perfil Electron não é descartável: contém arquivos de domínio e Local Storage do Chromium. Cookies, cache de sessão, logs, crash dumps e temporários não são dados de produto e devem ser excluídos mediante regra explícita.
 
 ## Fontes de persistência e destino
 
