@@ -161,7 +161,9 @@ NativeBundle NativeDataReader::open(const QString& folder) {
         if (!value.isString()) fail("Domínio selecionado inválido.");
         selected.insert(value.toString());
     }
-    if (chosen.size() != 3 || selected != QSet<QString>(selectedNames.begin(), selectedNames.end()))
+    QSet<QString> expectedSelection;
+    for (const auto& name : selectedNames) expectedSelection.insert(name);
+    if (chosen.size() != 3 || selected != expectedSelection)
         fail("A seleção de dados não corresponde à migração acordada.");
     const auto domains = checkedObject(bundle.manifest.value("domains"), "domains");
     if (domains.size() != domainNames.size()) fail("Quantidade de domínios nativos incorreta.");
@@ -169,6 +171,8 @@ NativeBundle NativeDataReader::open(const QString& folder) {
         const auto domain = checkedObject(domains.value(name), name);
         if (domain.value("schemaVersion").toInt(-1) != 1) fail("Versão do domínio inválida: " + name);
         const auto data = checkedObject(domain.value("data"), name + ".data");
+        if (!selected.contains(name) && !data.value("entities").toArray().isEmpty())
+            fail("Entidades de domínio fora do escopo.");
         if (!checkedArray(data, "catalogRecords", name).isEmpty()
             || !checkedArray(data, "preservedUnknown", name).isEmpty()) fail("Dados opacos não são formato nativo.");
         if (name == "fabricator" || name == "customizer") checkEntities(data, name);

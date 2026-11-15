@@ -1,0 +1,28 @@
+name: Nymi Qt native desktop and data reader
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-qt.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-qt.yml'
+jobs:
+  qt-desktop-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 6 development dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools qt6-multimedia-dev libgl1-mesa-dev
+      - name: Configure Qt/C++20 targets
+        run: cmake -S . -B build/qt -DNYMI_BUILD_DESKTOP=ON -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Compile native reader, verifier and desktop
+        run: cmake --build build/qt --parallel 2
+      - name: Test native core and bundle reader
+        run: ctest --test-dir build/qt --output-on-failure
