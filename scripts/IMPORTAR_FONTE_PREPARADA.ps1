@@ -3,7 +3,10 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$expected = "5b00f45a8f3edfc389c5dfdb28e533dc72624d1eecfabd975d0cfba79041dbdf"
+# Ambos os ZIPs foram produzidos nesta conversa; nao aceitar hashes desconhecidos.
+$originalHash = "b2d34839375ab71601933b76199762ef4d98ca5a8baca05848eb49f66b63aea4"
+$revisedHash = "5b00f45a8f3edfc389c5dfdb28e533dc72624d1eecfabd975d0cfba79041dbdf"
+$acceptedHashes = @($originalHash, $revisedHash)
 function MustRunGit([string[]]$Arguments) {
     & git @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Git falhou: $($Arguments -join ' ')" }
@@ -11,7 +14,10 @@ function MustRunGit([string[]]$Arguments) {
 try {
   $resolvedZip = (Resolve-Path -LiteralPath $ZipPath).Path
   $hash = (Get-FileHash -LiteralPath $resolvedZip -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($hash -ne $expected) { throw "ZIP incorreto: hash SHA-256 nao corresponde ao pacote preparado nesta conversa." }
+  if ($acceptedHashes -notcontains $hash) {
+    throw "ZIP desconhecido: SHA-256 $hash. Importacao bloqueada para proteger o repositorio."
+  }
+  if ($hash -eq $originalHash) { Write-Host "Pacote original reconhecido. Sera removido CSS residual da versao experimental do editor." }
   Push-Location $repo
   if (-not (Test-Path ".git")) { throw "Clone o repositorio do GitHub antes de importar." }
   $remote = (& git remote get-url origin).Trim()
@@ -28,6 +34,30 @@ try {
     Expand-Archive -LiteralPath $resolvedZip -DestinationPath $tempDir
     foreach ($required in @("package.json", "electron/main.ts", "src/renderer/src/ui/App.tsx", "src/renderer/src/features/editorV6/EditorV6Page.tsx", "Lixo/README.md", "native/nymi-core/src/Timeline.cpp")) {
       if (-not (Test-Path -LiteralPath (Join-Path $tempDir $required))) { throw "Arquivo obrigatorio ausente: $required" }
+    }
+    # A primeira variante do pacote manteve 52 linhas CSS do editor experimental.
+    # A segunda variante ja as removeu. Ambas passam pela verificacao abaixo.
+    $css = Join-Path $tempDir "src/renderer/src/ui/styles.css"
+    if (-not (Test-Path -LiteralPath $css)) { throw "CSS principal nao encontrado." }
+    $cssLines = [IO.File]::ReadAllLines($css, [Text.Encoding]::UTF8)
+    $cleanCssLines = @($cssLines | Where-Object { $_ -notmatch '(?i)\\.editor-v7' })
+    if ($cleanCssLines.Count -ne $cssLines.Length) {
+      [IO.File]::WriteAllText($css, (($cleanCssLines -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
+      Write-Host "CSS legado da versao experimental removido."
+    }
+    foreach ($obsolete in @(
+      "src/renderer/src/features/editorV7",
+      "electron/domains/editorV7",
+      "src/shared/editorV7.ts",
+      "src/shared/editorV7IpcChannels.ts",
+      "src/shared/editorV7Svg.ts",
+      "tests/editor-v7",
+      "scripts/editor-v7",
+      "docs/editor-v7"
+    )) {
+      if (Test-Path -LiteralPath (Join-Path $tempDir $obsolete)) {
+        throw "Pacote inclui codigo desativado inesperado: $obsolete"
+      }
     }
     $files = Get-ChildItem -LiteralPath $tempDir -Recurse -Force -File
     foreach ($file in $files) {
