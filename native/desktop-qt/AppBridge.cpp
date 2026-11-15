@@ -45,6 +45,7 @@ void AppBridge::loadBundle(const QString& directory) {
         bundle_ = std::move(next);
         clearVideo();
         projectData();
+        fabricator_.setBundle(*bundle_);
         status_ = QString("Bundle nativo v1 carregado: %1 personagens, %2 vídeos (%3 rascunhos).")
             .arg(characters_.size()).arg(videos_.size()).arg(drafts_);
     } catch (const std::exception& e) {

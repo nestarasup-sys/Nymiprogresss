@@ -13,7 +13,7 @@ ApplicationWindow {
     minimumHeight: 630
     title: "Nymiprogresss — Desktop nativo"
     color: "#10151e"
-    property string selectedModule: "Base de vídeos"
+    property string selectedModule: "Fabricador DEV"
     property string searchText: ""
     property var selectedItem: null
     readonly property var modules: ["Fabricador DEV", "Customizador", "Base de vídeos",
@@ -130,7 +130,15 @@ ApplicationWindow {
                     }
                 }
             }
+            Loader {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                active: window.selectedModule === "Fabricador DEV"
+                visible: active
+                source: "FabricatorPage.qml"
+            }
             ColumnLayout {
+                visible: window.selectedModule !== "Fabricador DEV"
                 Layout.fillHeight: true
                 Layout.preferredWidth: 425
                 Layout.minimumWidth: 280
@@ -211,6 +219,7 @@ ApplicationWindow {
                 }
             }
             Rectangle {
+                visible: window.selectedModule !== "Fabricador DEV"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 color: "#121b28"

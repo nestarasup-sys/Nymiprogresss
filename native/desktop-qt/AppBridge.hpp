@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NativeDataReader.hpp"
+#include "FabricatorWorkspace.hpp"
 
 #include <QFutureWatcher>
 #include <QObject>
@@ -16,6 +17,7 @@ struct VideoCheck {
 
 class AppBridge : public QObject {
     Q_OBJECT
+    Q_PROPERTY(FabricatorWorkspace* fabricator READ fabricator CONSTANT)
     Q_PROPERTY(bool loaded READ loaded NOTIFY dataChanged)
     Q_PROPERTY(QString status READ status NOTIFY dataChanged)
     Q_PROPERTY(QString bundleFolder READ bundleFolder NOTIFY dataChanged)
@@ -32,6 +34,7 @@ public:
     Q_INVOKABLE void verifyAndOpenVideo(const QString& videoId);
     Q_INVOKABLE void clearVideo();
     Q_INVOKABLE double sampleNormalizedPosition(double seconds) const;
+    FabricatorWorkspace* fabricator() { return &fabricator_; }
     bool loaded() const { return bundle_.has_value(); }
     QString status() const { return status_; }
     QString bundleFolder() const { return bundle_ ? bundle_->root : QString{}; }
@@ -50,6 +53,7 @@ signals:
 private:
     void projectData();
     std::optional<nymi::NativeBundle> bundle_;
+    FabricatorWorkspace fabricator_;
     QVariantList fabricator_;
     QVariantList characters_;
     QVariantList videos_;
