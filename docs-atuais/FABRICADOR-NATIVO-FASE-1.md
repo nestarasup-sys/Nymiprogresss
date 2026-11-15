@@ -34,3 +34,28 @@ O resultado de conversão real deve ser validado no computador do usuário.
 A fase 1 ainda não implementa recorte automático, chroma, costura das juntas
 nem escrita de projetos. Não declarar paridade com o Fabricador original
 até comparar modelo a modelo.
+
+## Rodadas 2 e 3 — Interface nativa e ferramentas iniciais
+
+A página `FabricatorPage.qml` reproduz a estrutura de navegação de 12 seções, 10
+slots e composição Modelos → Canvas/Peças/Camadas/Juntas. O reader nativo
+reconstrói projetos convertidos, incluindo PNGs por peça e ordem de desenho.
+`FabricatorWorkspace` expõe zoom, pan, seleção, movimento de peças, rotação,
+visibilidade e histórico desfazer/refazer.
+
+A edição nesta etapa é **apenas das transformações visuais de peças**.
+Rascunhos são salvos sob a área privada `QStandardPaths::AppLocalDataLocation`,
+em formato `nymiprogress.fabricator-draft` v1, com fingerprint SHA-256 do modelo
+de origem e gravação atômica via `QSaveFile`. Não são gravados no bundle
+original, no Git ou no aplicativo Electron. Abertura de rascunho exige mesma
+identidade e composição de peças; exclusão é explícita e confirmada na UI.
+
+### Não implementado nesta entrega
+
+- Importação e recorte/chroma de novas folhas;
+- deformação de malha, reencoloração, encaixe de juntas, máscaras e costuras;
+- editores reais de poses, cabelos, roupas, expressões e animações;
+- comparação pixel a pixel e validação do bundle real do usuário;
+- escrita de dados convertidos em um novo formato central de edição.
+
+**Não declarar equivalência completa com a versão Electron.**

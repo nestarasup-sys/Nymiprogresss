@@ -1,5 +1,9 @@
 #include "FabricatorWorkspace.hpp"
 #include <QDir>
+#include <QFileInfo>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QJsonParseError>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -178,8 +182,107 @@ void FabricatorWorkspace::resetWorking() {
     dirty_ = false;
     changedState();
 }
-// Draft persistence is added in the final round. The data bundle stays immutable.
-QString FabricatorWorkspace::draftPath() const { return {}; }
-bool FabricatorWorkspace::saveDraft() { return false; }
-bool FabricatorWorkspace::loadDraft() { return false; }
-bool FabricatorWorkspace::discardDraft() { return false; }
+QString FabricatorWorkspace::draftPath() const {
+    if (!original_) return {};
+    const auto base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (base.isEmpty()) return {};
+    return QDir(base).filePath(QString("fabricator-drafts/slot-%1.json").arg(original_->slot));
+}
+namespace {
+QString sourceFingerprint(const nymi::FabricatorModel& model) {
+    return QString::fromLatin1(QCryptographicHash::hash(
+        QJsonDocument(model.document).toJson(QJsonDocument::Compact),
+        QCryptographicHash::Sha256).toHex());
+}
+}
+bool FabricatorWorkspace::saveDraft() {
+    if (!working_ || !original_) { error_ = "Nenhum modelo ativo para salvar."; changedState(); return false; }
+    const auto destination = draftPath();
+    if (destination.isEmpty() || !QDir().mkpath(QFileInfo(destination).absolutePath())) {
+        error_ = "Não foi possível criar a pasta privada do rascunho."; changedState(); return false;
+    }
+    QJsonArray changes;
+    for (const auto& part : working_->parts) {
+        changes.append(QJsonObject{{"id", part.id}, {"x", part.x}, {"y", part.y},
+            {"rotation", part.rotation}, {"hidden", part.hidden}});
+    }
+    QJsonObject record{
+        {"format", "nymiprogress.fabricator-draft"}, {"version", 1},
+        {"slot", original_->slot}, {"sourceModelSha256", sourceFingerprint(*original_)},
+        {"createdAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {"transforms", changes}
+    };
+    QSaveFile output(destination);
+    if (!output.open(QIODevice::WriteOnly)) { error_ = "Erro ao abrir rascunho privado."; changedState(); return false; }
+    const auto bytes = QJsonDocument(record).toJson(QJsonDocument::Indented);
+    if (output.write(bytes) != bytes.size() || !output.commit()) {
+        error_ = "Falha ao gravar rascunho privado."; changedState(); return false;
+    }
+    error_ = "Rascunho salvo localmente. O bundle v1 continua intacto.";
+    dirty_ = false;
+    changedState();
+    return true;
+}
+bool FabricatorWorkspace::loadDraft() {
+    if (!original_ || !working_) return false;
+    QFile input(draftPath());
+    if (!input.open(QIODevice::ReadOnly)) { error_ = "Rascunho local inexistente."; changedState(); return false; }
+    if (input.size() > 2 * 1024 * 1024) { error_ = "Rascunho grande demais."; changedState(); return false; }
+    QJsonParseError parse;
+    const auto json = QJsonDocument::fromJson(input.readAll(), &parse);
+    if (parse.error != QJsonParseError::NoError || !json.isObject()) {
+        error_ = "JSON do rascunho inválido."; changedState(); return false;
+    }
+    const auto data = json.object();
+    if (data.value("format").toString() != "nymiprogress.fabricator-draft" ||
+        data.value("version").toInt(-1) != 1 || data.value("slot").toInt(-1) != original_->slot ||
+        data.value("sourceModelSha256").toString() != sourceFingerprint(*original_) ||
+        !data.value("transforms").isArray()) {
+        error_ = "Rascunho não pertence à versão atual deste modelo."; changedState(); return false;
+    }
+    auto next = *original_;
+    const auto changes = data.value("transforms").toArray();
+    if (changes.size() != next.parts.size()) {
+        error_ = "Rascunho incompleto: contagem de peças diferente."; changedState(); return false;
+    }
+    QHash<QString, QJsonObject> byId;
+    for (const auto& item : changes) {
+        if (!item.isObject()) { error_ = "Transformação inválida."; changedState(); return false; }
+        const auto change = item.toObject();
+        const auto id = change.value("id").toString();
+        if (id.isEmpty() || byId.contains(id)) { error_ = "ID duplicado no rascunho."; changedState(); return false; }
+        byId.insert(id, change);
+    }
+    for (auto& part : next.parts) {
+        const auto change = byId.value(part.id);
+        if (change.isEmpty() || !change.value("hidden").isBool()) {
+            error_ = "Rascunho contém peça ausente."; changedState(); return false;
+        }
+        for (const char* key : {"x", "y", "rotation"}) {
+            const auto value = change.value(QLatin1String(key));
+            if (!value.isDouble() || !std::isfinite(value.toDouble()) || std::abs(value.toDouble()) > 100000) {
+                error_ = "Coordenada inválida no rascunho."; changedState(); return false;
+            }
+        }
+        part.x = change.value("x").toDouble();
+        part.y = change.value("y").toDouble();
+        part.rotation = change.value("rotation").toDouble();
+        part.hidden = change.value("hidden").toBool();
+    }
+    undo_.append(*working_); if (undo_.size() > 80) undo_.removeFirst();
+    redo_.clear();
+    working_ = std::move(next);
+    dirty_ = false;
+    error_ = "Rascunho local carregado; bundle original preservado.";
+    changedState();
+    return true;
+}
+bool FabricatorWorkspace::discardDraft() {
+    const auto path = draftPath();
+    if (path.isEmpty() || !QFileInfo::exists(path) || !QFile::remove(path)) {
+        error_ = "Não havia rascunho local para excluir."; changedState(); return false;
+    }
+    error_ = "Rascunho local excluído. O bundle original não foi tocado.";
+    changedState();
+    return true;
+}

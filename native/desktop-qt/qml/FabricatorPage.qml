@@ -15,6 +15,22 @@ Item {
         ["Animação Cabelo Dev", "Animação Cabelo Dev"], ["Animador Dev", "Animador Dev"],
         ["Design Dev", "Design Dev"]
     ]
+    Dialog {
+        id: confirmReset
+        title: "Restaurar posições originais?"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        anchors.centerIn: parent
+        onAccepted: fab.resetWorking()
+    }
+    Dialog {
+        id: confirmDeleteDraft
+        title: "Excluir somente o rascunho local?"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        anchors.centerIn: parent
+        onAccepted: fab.discardDraft()
+    }
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -184,8 +200,8 @@ Item {
                                     model: fab.parts
                                     delegate: Item {
                                         required property var modelData
-                                        x: modelData.x * artboard.scaleValue
-                                        y: modelData.y * artboard.scaleValue
+                                        x: partDrag.pressed && partDrag.moved ? partDrag.previewX * artboard.scaleValue : modelData.x * artboard.scaleValue
+                                        y: partDrag.pressed && partDrag.moved ? partDrag.previewY * artboard.scaleValue : modelData.y * artboard.scaleValue
                                         width: modelData.width * artboard.scaleValue
                                         height: modelData.height * artboard.scaleValue
                                         visible: !modelData.hidden
@@ -209,8 +225,43 @@ Item {
                                             border.width: 2
                                         }
                                         MouseArea {
+                                            id: partDrag
                                             anchors.fill: parent
-                                            onClicked: fab.selectPart(modelData.id)
+                                            property real startSceneX: 0
+                                            property real startSceneY: 0
+                                            property real originalX: 0
+                                            property real originalY: 0
+                                            property real previewX: modelData.x
+                                            property real previewY: modelData.y
+                                            property bool moved: false
+                                            onPressed: function(mouse) {
+                                                fab.selectPart(modelData.id)
+                                                fab.beginGesture()
+                                                var point = mapToItem(stage, mouse.x, mouse.y)
+                                                startSceneX = point.x
+                                                startSceneY = point.y
+                                                originalX = modelData.x
+                                                originalY = modelData.y
+                                                previewX = originalX
+                                                previewY = originalY
+                                                moved = false
+                                            }
+                                            onPositionChanged: function(mouse) {
+                                                if (!pressed) return
+                                                var point = mapToItem(stage, mouse.x, mouse.y)
+                                                var dx = (point.x - startSceneX) / artboard.scaleValue
+                                                var dy = (point.y - startSceneY) / artboard.scaleValue
+                                                if (Math.abs(dx) + Math.abs(dy) > 0.25) moved = true
+                                                if (moved) {
+                                                    previewX = originalX + dx
+                                                    previewY = originalY + dy
+                                                }
+                                            }
+                                            onReleased: {
+                                                if (moved) fab.setPartPosition(modelData.id, previewX, previewY)
+                                                fab.endGesture()
+                                            }
+                                            onCanceled: fab.endGesture()
                                         }
                                     }
                                 }
@@ -303,11 +354,56 @@ Item {
                             }
                         }
                         Label { text: fab.selectedPart.name || "Selecione uma peça"; color: "#a6c3df"; font.pixelSize: 12 }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            visible: !!fab.selectedPart.id
+                            Label { text: "X"; color: "#aec4d9" }
+                            TextField {
+                                Layout.fillWidth: true
+                                text: Number(fab.selectedPart.x || 0).toFixed(1)
+                                validator: DoubleValidator { bottom: -100000; top: 100000; decimals: 2 }
+                                onEditingFinished: fab.setPartPosition(fab.selectedPartId,
+                                    Number(text), fab.selectedPart.y)
+                            }
+                            Label { text: "Y"; color: "#aec4d9" }
+                            TextField {
+                                Layout.fillWidth: true
+                                text: Number(fab.selectedPart.y || 0).toFixed(1)
+                                validator: DoubleValidator { bottom: -100000; top: 100000; decimals: 2 }
+                                onEditingFinished: fab.setPartPosition(fab.selectedPartId,
+                                    fab.selectedPart.x, Number(text))
+                            }
+                            Label { text: "Rotação"; color: "#aec4d9" }
+                            TextField {
+                                Layout.fillWidth: true
+                                text: Number(fab.selectedPart.rotation || 0).toFixed(1)
+                                validator: DoubleValidator { bottom: -3600; top: 3600; decimals: 2 }
+                                onEditingFinished: fab.setPartRotation(fab.selectedPartId, Number(text))
+                            }
+                            Label { text: "Visível"; color: "#aec4d9" }
+                            CheckBox {
+                                checked: !fab.selectedPart.hidden
+                                onClicked: fab.setPartVisible(fab.selectedPartId, checked)
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Button { text: "↶"; enabled: fab.canUndo; onClicked: fab.undo(); ToolTip.text: "Desfazer" }
+                            Button { text: "↷"; enabled: fab.canRedo; onClicked: fab.redo(); ToolTip.text: "Refazer" }
+                            Button { text: "Restaurar"; enabled: !!fab.modelInfo.slot; onClicked: confirmReset.open() }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Button { text: "Salvar rascunho"; enabled: !!fab.modelInfo.slot; onClicked: fab.saveDraft() }
+                            Button { text: "Carregar"; enabled: !!fab.modelInfo.slot; onClicked: fab.loadDraft() }
+                        }
+                        Button { text: "Excluir rascunho local"; enabled: !!fab.modelInfo.slot; onClicked: confirmDeleteDraft.open() }
                         Label {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
-                            text: "Prévia nativa, seleção e zoom. Edição e salvamento de rascunhos serão integrados nesta rodada."
-                            color: "#8a9db8"
+                            text: fab.error || "Transformações e rascunhos são locais; o bundle convertido nunca é modificado."
+                            color: fab.error ? "#efc06f" : "#8a9db8"
                             font.pixelSize: 11
                         }
                     }

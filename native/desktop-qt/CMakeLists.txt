@@ -11,3 +11,11 @@ target_link_libraries(nymi-desktop PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Q
   Qt6::Concurrent nymi-core nymi-native-data nymi-fabricator)
 target_compile_features(nymi-desktop PRIVATE cxx_std_20)
 set_target_properties(nymi-desktop PROPERTIES WIN32_EXECUTABLE TRUE)
+
+if(BUILD_TESTING)
+  add_executable(nymi-fabricator-workspace-tests
+    tests/FabricatorWorkspaceTest.cpp FabricatorWorkspace.cpp FabricatorWorkspace.hpp)
+  set_target_properties(nymi-fabricator-workspace-tests PROPERTIES AUTOMOC ON)
+  target_link_libraries(nymi-fabricator-workspace-tests PRIVATE Qt6::Core nymi-native-data nymi-fabricator)
+  add_test(NAME nymi-fabricator-workspace COMMAND nymi-fabricator-workspace-tests)
+endif()
