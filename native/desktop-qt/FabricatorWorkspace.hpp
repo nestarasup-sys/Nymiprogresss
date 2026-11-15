@@ -7,7 +7,7 @@
 
 class FabricatorWorkspace : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QVariantList slots READ slots NOTIFY changed)
+    Q_PROPERTY(QVariantList modelSlots READ modelSlots NOTIFY changed)
     Q_PROPERTY(QVariantList parts READ parts NOTIFY changed)
     Q_PROPERTY(QVariantList joints READ joints NOTIFY changed)
     Q_PROPERTY(QVariantMap selectedPart READ selectedPart NOTIFY changed)
@@ -24,7 +24,7 @@ class FabricatorWorkspace : public QObject {
 public:
     explicit FabricatorWorkspace(QObject* parent = nullptr);
     void setBundle(const nymi::NativeBundle& bundle);
-    QVariantList slots() const;
+    QVariantList modelSlots() const;
     QVariantList parts() const;
     QVariantList joints() const;
     QVariantMap selectedPart() const;

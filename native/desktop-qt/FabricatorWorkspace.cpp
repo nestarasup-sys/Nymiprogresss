@@ -30,7 +30,7 @@ void FabricatorWorkspace::clearEditState() {
     gestureBefore_.reset(); gestureChanged_ = false; selectedPartId_.clear();
     dirty_ = false; zoom_ = 1.0; panX_ = panY_ = 0;
 }
-QVariantList FabricatorWorkspace::slots() const {
+QVariantList FabricatorWorkspace::modelSlots() const {
     QVariantList result;
     for (int slot = 1; slot <= 10; ++slot) {
         QVariantMap item{{"slot", slot}, {"name", QString("Vazio")}, {"filled", false}, {"partCount", 0}};

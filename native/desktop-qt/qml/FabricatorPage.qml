@@ -88,7 +88,7 @@ Item {
                         visible: page.activeSection === "Modelos"
                         spacing: 3
                         Repeater {
-                            model: fab.slots
+                            model: fab.modelSlots
                             delegate: Button {
                                 required property var modelData
                                 Layout.fillWidth: true

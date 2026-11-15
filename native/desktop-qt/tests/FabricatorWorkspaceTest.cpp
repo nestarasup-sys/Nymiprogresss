@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     }}};
     FabricatorWorkspace fab;
     fab.setBundle(bundle);
-    require(fab.slots().size() == 10);
+    require(fab.modelSlots().size() == 10);
     require(fab.parts().size() == 1 && !fab.modelInfo().isEmpty());
     fab.selectPart("p1");
     fab.beginGesture();
