@@ -120,3 +120,5 @@ FabricatorScan FabricatorProjectReader::scan(const NativeBundle& bundle) {
     }
     return result;
 }
+
+} // namespace nymi
