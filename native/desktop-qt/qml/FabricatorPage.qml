@@ -235,8 +235,7 @@ Item {
                                             property real previewY: modelData.y
                                             property bool moved: false
                                             onPressed: function(mouse) {
-                                                fab.selectPart(modelData.id)
-                                                fab.beginGesture()
+                                                // Do not notify the model while the MouseArea holds the drag.
                                                 var point = mapToItem(stage, mouse.x, mouse.y)
                                                 startSceneX = point.x
                                                 startSceneY = point.y
@@ -258,10 +257,12 @@ Item {
                                                 }
                                             }
                                             onReleased: {
-                                                if (moved) fab.setPartPosition(modelData.id, previewX, previewY)
-                                                fab.endGesture()
+                                                var id = modelData.id
+                                                var nextX = previewX
+                                                var nextY = previewY
+                                                if (moved) fab.setPartPosition(id, nextX, nextY)
+                                                fab.selectPart(id)
                                             }
-                                            onCanceled: fab.endGesture()
                                         }
                                     }
                                 }
