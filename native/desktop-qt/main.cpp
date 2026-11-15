@@ -3,6 +3,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QTimer>
 #include <QUrl>
 
 int main(int argc, char* argv[]) {
@@ -15,6 +16,8 @@ int main(int argc, char* argv[]) {
     QCommandLineOption dataOption(QStringList{"data-dir"},
         "Pasta privada que contém o manifest.json nativo v1.", "pasta");
     parser.addOption(dataOption);
+    QCommandLineOption smokeOption(QStringList{"smoke-test"}, "Teste de abertura da interface QML e encerramento automatico.");
+    parser.addOption(smokeOption);
     parser.process(app);
 
     AppBridge bridge;
@@ -26,5 +29,6 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("nativeBridge", &bridge);
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/NymiDesktop/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
+    if (parser.isSet(smokeOption)) QTimer::singleShot(1500, &app, &QCoreApplication::quit);
     return app.exec();
 }
