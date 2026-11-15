@@ -1,5 +1,6 @@
 option(NYMI_BUILD_DESKTOP "Build Qt desktop shell" ON)
 add_subdirectory(nymi-core)
 if(NYMI_BUILD_DESKTOP)
+  add_subdirectory(native-data)
   add_subdirectory(desktop-qt)
 endif()
