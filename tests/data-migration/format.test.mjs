@@ -46,3 +46,25 @@ test('rejects opaque legacy rows in a supposedly converted native domain', () =>
   manifest.domains.roteiros.data.preservedUnknown.push({ sourceTable: 'legacy_table', values: { payload: 'opaque' } })
   assert.throws(() => assertNativeDataManifest(manifest), /linhas brutas ou dados não classificados/)
 })
+
+test('validates the selected migration scope and typed recovery-history records', () => {
+  const manifest = validManifest()
+  manifest.provenance.selectedDomains = ['fabricator', 'customizer', 'baseVideos']
+  manifest.domains.fabricator.data.recoveryHistory.push({
+    id: 'recovery:abc123', kind: 'recovery-document', archive: 'fabricator-archive', relativePath: 'pose.json',
+    sourceSha256: 'b'.repeat(64), sourceType: 'json', document: { id: 'pose-1', frames: [] }
+  })
+  assert.equal(assertNativeDataManifest(manifest), manifest)
+  manifest.domains.fabricator.data.recoveryHistory[0].sourceSha256 = 'bad'
+  assert.throws(() => assertNativeDataManifest(manifest), /Registro de recuperação inválido/)
+})
+
+test('rejects widened selected scope and untyped Fabricator resources', () => {
+  const widened = validManifest()
+  widened.provenance.selectedDomains = ['fabricator', 'customizer', 'baseVideos', 'editorV6']
+  assert.throws(() => assertNativeDataManifest(widened), /Escopo de domínios selecionados inválido/)
+
+  const untyped = validManifest()
+  untyped.domains.fabricator.data.files.push({ relativePath: 'poses/pose.json', sha256: 'c'.repeat(64), sourceCopies: ['filesystem'] })
+  assert.throws(() => assertNativeDataManifest(untyped), /sem documento, asset ou seleção tipada/)
+})

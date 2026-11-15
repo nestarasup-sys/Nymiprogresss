@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3')
 const DOMAIN_ROOTS = Object.freeze([
   { source: 'fabricator.models', relative: 'fabricator/models', target: 'fabricator' },
+  { source: 'fabricator.accessories', relative: 'fabricator/accessories', target: 'fabricator' },
   { source: 'fabricator.design-settings', relative: 'fabricator/design-settings', target: 'fabricator' },
   { source: 'fabricator.poses', relative: 'fabricator/poses', target: 'fabricator' },
   { source: 'fabricator.animations', relative: 'fabricator/animations', target: 'fabricator' },
@@ -143,8 +144,8 @@ function parseFile(file, targetDomain, assets) {
     record.modelSlot = Number(/^model-(\d+)/i.exec(file.relativePath)?.[1])
     record.selected = true
   } else {
-    record.opaqueAsset = addAsset(file.bytes, 'application/octet-stream', assets)
-    record.preservedUnknown = true
+    record.asset = { $asset: addAsset(file.bytes, 'application/octet-stream', assets) }
+    record.kind = 'fabricator-resource-asset'
   }
   return record
 }
@@ -188,7 +189,7 @@ export async function adaptFabricatorCustomizer({ appDataRoot, snapshotPath }) {
         }
       }
       if (migrated.references) refs.push(...migrated.references)
-      if (migrated.preservedUnknown || migrated.parseError) target.preservedUnknown.push({ relativePath, sha256: migrated.sha256, asset: migrated.opaqueAsset ?? null, parseError: migrated.parseError ?? null })
+      if (migrated.parseError) target.preservedUnknown.push({ relativePath, sha256: migrated.sha256, asset: migrated.opaqueAsset ?? null, parseError: migrated.parseError ?? null })
       if (migrated.parseError) result.blocked.push({ code: 'unparsed-json-preserved', domain: mapping.source, relativePath })
       target.files.push(migrated)
     }

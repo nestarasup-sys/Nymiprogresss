@@ -74,11 +74,13 @@ const SEMANTIC_TABLES = new Set([
   'base_video_categories', 'base_video_category_assignments', 'base_video_sequence'
 ])
 
-function semanticSqliteDomains(db, assets, domains) {
+function semanticSqliteDomains(db, assets, domains, { selectedScope = false } = {}) {
   const existing = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name))
   const requiredColumns = {
-    roteiros: ['id', 'character_ids_json'], roteiro_tiktoks: ['id', 'roteiro_id', 'position'],
-    roteiro_sections: ['section_id', 'roteiro_id', 'section_kind', 'blocks_json'],
+    ...(!selectedScope ? {
+      roteiros: ['id', 'character_ids_json'], roteiro_tiktoks: ['id', 'roteiro_id', 'position'],
+      roteiro_sections: ['section_id', 'roteiro_id', 'section_kind', 'blocks_json']
+    } : {}),
     base_video_details: ['video_id', 'video_number'], base_video_categories: ['category_id', 'name'],
     base_video_category_assignments: ['video_id', 'category_id'], base_video_sequence: ['sequence_id', 'next_number']
   }
@@ -88,9 +90,9 @@ function semanticSqliteDomains(db, assets, domains) {
     if (required.some((column) => !columns.has(column))) return false
   }
   const all = (table) => existing.has(table) ? db.prepare(`SELECT * FROM ${quoteIdentifier(table)}`).all().map((row) => portableRow(row, assets)) : []
-  const roteiroRows = all('roteiros')
-  const tiktoks = all('roteiro_tiktoks')
-  const sections = all('roteiro_sections')
+  const roteiroRows = selectedScope ? [] : all('roteiros')
+  const tiktoks = selectedScope ? [] : all('roteiro_tiktoks')
+  const sections = selectedScope ? [] : all('roteiro_sections')
   const byRoteiro = new Map(roteiroRows.map((row) => [row.id, { ...row, characterIds: JSON.parse(row.character_ids_json), tiktoks: [], sections: [], exportHistory: [], importOrigin: null }]))
   const tiktokById = new Map(tiktoks.map((row) => [row.id, { ...row, sections: [] }]))
   for (const section of sections) {
@@ -111,8 +113,8 @@ function semanticSqliteDomains(db, assets, domains) {
     if (!parent) throw new Error('TikTok sem roteiro correspondente.')
     parent.tiktoks.push(tiktok)
   }
-  for (const row of all('roteiro_export_logs')) byRoteiro.get(row.roteiro_id)?.exportHistory.push(row)
-  for (const row of all('roteiro_import_origins')) {
+  for (const row of selectedScope ? [] : all('roteiro_export_logs')) byRoteiro.get(row.roteiro_id)?.exportHistory.push(row)
+  for (const row of selectedScope ? [] : all('roteiro_import_origins')) {
     const parent = byRoteiro.get(row.roteiro_id)
     if (parent) {
       row.createdCharacterIds = JSON.parse(row.created_character_ids_json)
@@ -127,29 +129,45 @@ function semanticSqliteDomains(db, assets, domains) {
     roteiro.sections.sort((a, b) => a.section_kind.localeCompare(b.section_kind) || a.section_id.localeCompare(b.section_id))
     domains.roteiros.documents.push(roteiro)
   }
-  const videos = all('base_video_details').map((video) => ({ ...video, categories: [] }))
-  const videoById = new Map(videos.map((video) => [video.video_id, video]))
-  const categoryById = new Map(all('base_video_categories').map((category) => [category.category_id, { ...category, videoIds: [] }]))
+  const videos = all('base_video_details').map((row) => ({
+    id: row.video_id,
+    status: row.video_number === null ? 'draft' : 'published',
+    number: row.video_number,
+    description: row.description_text,
+    timeline: row.timeline,
+    sceneEndSeconds: row.scene_end_seconds,
+    firstGroupReactionSeconds: row.first_group_reaction_seconds,
+    secondGroupReactionSeconds: row.second_group_reaction_seconds,
+    additionalContext: row.additional_context,
+    updatedAt: row.updated_at,
+    categoryIds: []
+  }))
+  const videoById = new Map(videos.map((video) => [video.id, video]))
+  const categoryById = new Map(all('base_video_categories').map((row) => [row.category_id, { id: row.category_id, name: row.name, color: row.color_hex, createdAt: row.created_at, videoIds: [] }]))
   for (const assignment of all('base_video_category_assignments')) {
     const video = videoById.get(assignment.video_id)
     const category = categoryById.get(assignment.category_id)
     if (!video || !category) throw new Error('Atribuição de categoria de vídeo sem alvo correspondente.')
-    video.categories.push(category.category_id)
-    category.videoIds.push(video.video_id)
+    video.categoryIds.push(category.id)
+    category.videoIds.push(video.id)
   }
+  videos.sort((a, b) => (a.number === null) - (b.number === null) || (a.number ?? 0) - (b.number ?? 0) || String(b.updatedAt).localeCompare(String(a.updatedAt)))
+  const sequenceRow = all('base_video_sequence')[0]
   domains.baseVideos.catalog = {
     videos,
-    categories: [...categoryById.values()],
-    sequence: all('base_video_sequence')[0] ?? null
+    drafts: videos.filter((video) => video.status === 'draft').map((video) => video.id),
+    categories: [...categoryById.values()].sort((a, b) => a.name.localeCompare(b.name, 'en') || a.createdAt.localeCompare(b.createdAt)),
+    sequence: sequenceRow ? { nextNumber: sequenceRow.next_number } : { nextNumber: Math.max(0, ...videos.map((video) => video.number ?? 0)) + 1 },
+    media: []
   }
-  domains.roteiros.characterSheets = all('roteiro_character_sheets').map((row) => ({
+  domains.roteiros.characterSheets = selectedScope ? [] : all('roteiro_character_sheets').map((row) => ({
     ...row, relationships: JSON.parse(row.relationships_json)
   }))
   return true
 }
 
 /** Extracts catalog rows from an already-created SQLite snapshot. Every row retains its source table and full original columns. */
-export function adaptSqliteCatalog(snapshotPath) {
+export function adaptSqliteCatalog(snapshotPath, { selectedScope = false } = {}) {
   const db = new Database(snapshotPath, { readonly: true, fileMustExist: true })
   const domains = Object.fromEntries(['fabricator', 'customizer', 'studio', 'roteiros', 'baseVideos', 'editorV6', 'libraries', 'preferences'].map((name) => [name, empty()]))
   const assets = new Map()
@@ -157,13 +175,28 @@ export function adaptSqliteCatalog(snapshotPath) {
   try {
     const version = db.pragma('user_version', { simple: true })
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((row) => row.name)
+    const rowCounts = Object.fromEntries(tables.map((table) => [table, db.prepare(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get().count]))
+    const tableSet = new Set(tables)
+    const scalarCount = (table, where = '', params = []) => tableSet.has(table)
+      ? db.prepare(`SELECT count(*) AS count FROM ${quoteIdentifier(table)} ${where}`).get(...params).count : 0
+    const scopeRows = {
+      selectedDomainMetadata: scalarCount('domains', "WHERE domain_id LIKE 'fabricator.%' OR domain_id='customizer.characters'"),
+      allDomainMetadata: scalarCount('domains'),
+      selectedDomainFiles: scalarCount('domain_files', "WHERE domain_id LIKE 'fabricator.%' OR domain_id='customizer.characters'"),
+      allDomainFiles: scalarCount('domain_files')
+    }
     for (const domain of Object.values(domains)) {
       domain.documents ??= []
       domain.catalog ??= null
     }
-    const semanticCatalog = semanticSqliteDomains(db, assets, domains)
+    const semanticCatalog = semanticSqliteDomains(db, assets, domains, { selectedScope })
     for (const table of tables) {
       if (DERIVED_SQLITE_TABLES.has(table)) continue
+      // Selected-scope conversion deliberately does not materialize excluded payloads.
+      // Base Video's semantic rows are handled above; only Fabricator/Customizer storage
+      // rows are relevant to the other selected adapters.
+      if (selectedScope && (table === 'roteiros' || table.startsWith('roteiro_'))) continue
+      if (selectedScope && !SEMANTIC_TABLES.has(table)) continue
       const rows = db.prepare(`SELECT * FROM ${quoteIdentifier(table)}`).all()
       if (semanticCatalog && SEMANTIC_TABLES.has(table)) continue
       let unmapped = 0
@@ -173,7 +206,7 @@ export function adaptSqliteCatalog(snapshotPath) {
         if (destination) domains[destination].catalogRecords.push(record)
         else { domains.preferences.preservedUnknown.push(record); unmapped += 1 }
       }
-      if (unmapped || !tableDestination(table, {})) unknownTables.push({ table, rows: unmapped })
+      if (!selectedScope && (unmapped || !tableDestination(table, {}))) unknownTables.push({ table, rows: unmapped })
     }
     return {
       schemaVersion: version,
@@ -181,6 +214,9 @@ export function adaptSqliteCatalog(snapshotPath) {
       assets: [...assets.values()].sort((a, b) => a.sha256.localeCompare(b.sha256)),
       unknownTables,
       semanticCatalog,
+      selectedScope,
+      rowCounts,
+      scopeRows,
       ready: unknownTables.length === 0
     }
   } finally { db.close() }

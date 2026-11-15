@@ -9,7 +9,7 @@ import { promisify } from 'node:util'
 import { adaptFabricatorCustomizer } from '../../scripts/data-migration/fabricator-customizer-adapter.mjs'
 import { adaptSqliteCatalog } from '../../scripts/data-migration/sqlite-catalog-adapter.mjs'
 import { snapshotSqlite } from '../../scripts/data-migration/sqlite-snapshot.mjs'
-import { buildPreparedMigration } from '../../scripts/data-migration/conversion-pipeline.mjs'
+import { buildSelectedPreparedMigration } from '../../scripts/data-migration/conversion-pipeline.mjs'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3')
@@ -69,7 +69,7 @@ test('dry-run CLI writes only aggregate report and SQLite snapshot for an explic
     assert.equal(result.conversionExecuted, false)
     assert.equal(result.planStatus, 'blocked')
     assert.equal(result.modules.fabricator.status, 'ready')
-    assert.equal(result.modules.sqliteCatalog.status, 'blocked')
+    assert.equal(result.modules.baseVideos.status, 'blocked')
     assert.ok((await readFile(path.join(snapshot, 'catalog.sqlite'))).length > 0)
   } finally { await rm(temporary, { recursive: true, force: true }) }
 })
@@ -92,7 +92,7 @@ test('maps catalog tables by module and retains unrecognized rows verbatim in bl
   } finally { await rm(temporary, { recursive: true, force: true }) }
 })
 
-test('externalizes embedded image data in SQLite JSON columns and blocks until nonimplemented modules are mapped', async () => {
+test('does not read excluded Roteiros payloads in the selected SQLite adapter', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'nymi-catalog-data-uri-'))
   const filePath = path.join(temporary, 'catalog.sqlite')
   try {
@@ -100,29 +100,27 @@ test('externalizes embedded image data in SQLite JSON columns and blocks until n
     const dataUrl = `data:image/png;base64,${Buffer.from('synthetic image bytes').toString('base64')}`
     db.prepare('INSERT INTO roteiro_sections VALUES (?, ?, ?)').run('section-image', 'roteiro-x', JSON.stringify([{ image: dataUrl }]))
     db.close()
-    const catalog = adaptSqliteCatalog(filePath)
-    const row = catalog.domains.roteiros.catalogRecords[0].values.blocks_json
-    assert.equal(JSON.stringify(row).includes('data:image/png;base64,'), false)
-    assert.equal(catalog.assets[0].bytes.toString(), 'synthetic image bytes')
-    const domainAdapter = { ready: true, conflicts: [], domains: { fabricator: { entities: [], files: [], preservedUnknown: [] }, customizer: { entities: [], files: [], preservedUnknown: [] } }, assets: [], references: [] }
-    const prepared = buildPreparedMigration({ catalog, fabricatorCustomizer: domainAdapter, inventorySha256: 'a'.repeat(64) })
-    assert.equal(prepared.plan.status, 'blocked')
-    assert.equal(prepared.manifest, null)
-    assert.equal(prepared.plan.modules.studio.status, 'blocked')
+    const catalog = adaptSqliteCatalog(filePath, { selectedScope: true })
+    assert.deepEqual(catalog.domains.roteiros.documents, [])
+    assert.equal(catalog.assets.length, 0)
+    assert.equal(catalog.semanticCatalog, true)
   } finally { await rm(temporary, { recursive: true, force: true }) }
 })
 
-test('blocks a character reference in a roteiro when its Customizer entity is absent', () => {
-  const domains = Object.fromEntries(['fabricator', 'customizer', 'studio', 'roteiros', 'baseVideos', 'editorV6', 'libraries', 'preferences'].map((name) => [name, { catalogRecords: [], preservedUnknown: [], documents: [] }]))
-  domains.roteiros.documents.push({ id: 'roteiro-fixture', characterIds: ['character-missing'] })
-  const catalog = { domains, assets: [], unknownTables: [] }
+test('excludes unresolved references in legacy Roteiros from the selected migration', () => {
+  const catalog = { semanticCatalog: true, assets: [], unknownTables: [], domains: {
+    roteiros: { documents: [{ id: 'roteiro-fixture', characterIds: ['character-missing'] }] },
+    baseVideos: { catalog: { videos: [], drafts: [], categories: [], sequence: { nextNumber: 1 }, media: [] } }
+  } }
   const fabricatorCustomizer = {
     ready: true, conflicts: [], blocked: [], assets: [], references: [],
     domains: { fabricator: { entities: [], files: [], preservedUnknown: [] }, customizer: { entities: [], files: [], preservedUnknown: [] } }
   }
-  const prepared = buildPreparedMigration({ catalog, fabricatorCustomizer, inventorySha256: 'c'.repeat(64) })
-  assert.equal(prepared.plan.modules.customizer.status, 'blocked')
-  assert.ok(prepared.plan.blockers.some((blocker) => blocker.code === 'unresolved-character-references' && blocker.references === 1))
+  const prepared = buildSelectedPreparedMigration({ catalog, fabricatorCustomizer, baseVideoMedia: { media: [], assets: [], blocked: [] }, recoveryArchives: { fabricator: [], baseVideos: [], assets: [], blocked: [] }, inventorySha256: 'c'.repeat(64) })
+  assert.equal(prepared.plan.status, 'ready')
+  assert.equal(prepared.plan.modules.customizer.status, 'ready')
+  assert.equal(prepared.plan.modules.roteiros.status, 'excluded')
+  assert.deepEqual(prepared.domains.roteiros.data.documents, [])
 })
 
 test('reconciles byte-identical Fabricator shadows, preserves Customizer IDs/pose links, and retains conflicts without choosing a winner', async () => {

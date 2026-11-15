@@ -3,11 +3,11 @@ import { NATIVE_DATA_DOMAINS } from '../../scripts/data-migration/format.mjs'
 
 export function emptyDomains() {
   const data = {
-    fabricator: { entities: [], files: [] },
-    customizer: { entities: [], files: [] },
+    fabricator: { entities: [], files: [], recoveryHistory: [] },
+    customizer: { entities: [], files: [], recoveryHistory: [] },
     studio: { projects: [], assets: [], prints: [] },
     roteiros: { documents: [], characterSheets: [] },
-    baseVideos: { catalog: { videos: [], categories: [], sequence: null } },
+    baseVideos: { catalog: { videos: [], drafts: [], categories: [], sequence: { nextNumber: 1 }, media: [] }, recoveryHistory: [] },
     editorV6: { projects: [], assets: [], prints: [] },
     libraries: { videos: [], backgrounds: [], editorAssets: [] },
     preferences: { editorV6Export: { configured: false } }

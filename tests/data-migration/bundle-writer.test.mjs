@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile, rm, lstat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createVerifiedBackup, verifyVerifiedBackup, writeCanonicalBundle } from '../../scripts/data-migration/bundle-writer.mjs'
+import { createVerifiedBackup, verifyVerifiedBackup, verifyCanonicalBundle, writeCanonicalBundle } from '../../scripts/data-migration/bundle-writer.mjs'
 import { createNativeDataManifest } from '../../scripts/data-migration/format.mjs'
 import { emptyDomains, sha256 } from './helpers.mjs'
 
@@ -50,6 +50,9 @@ test('bundle writer is dry-run by default and writes verified assets only when e
     assert.equal(written.written, true)
     assert.equal(await readFile(path.join(destination, 'manifest.json'), 'utf8').then((text) => JSON.parse(text).format), 'nymiprogress.native-data')
     assert.deepEqual(await readFile(path.join(destination, ...manifest.assets[0].path.split('/'))), bytes)
+    assert.equal((await verifyCanonicalBundle(destination)).verified, true)
+    await writeFile(path.join(destination, ...manifest.assets[0].path.split('/')), 'tampered')
+    await assert.rejects(verifyCanonicalBundle(destination), /falhou na verificação/)
     await assert.rejects(writeCanonicalBundle({ manifest, assets: [{ sha256: hash, bytes }], destinationRoot: destination, execute: true }), /já existe/)
   } finally {
     await rm(temporary, { recursive: true, force: true })

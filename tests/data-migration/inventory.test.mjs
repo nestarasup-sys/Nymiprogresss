@@ -51,6 +51,14 @@ test('classifies every known top-level app-data family and explicitly reviews un
   assert.deepEqual(classifyLegacyPath('unexpected/file.bin'), { domain: 'unclassified', disposition: 'review' })
 })
 
+test('classifies selected recovery archives and excludes legacy Roteiros backups by scope', () => {
+  assert.deepEqual(classifyLegacyPath('backups/hair-dev-before-clear-set/hair/model-1/hair.json'), { domain: 'fabricator.recovery', disposition: 'migrate' })
+  assert.deepEqual(classifyLegacyPath('backups/legacy-video-import-set/catalog.json'), { domain: 'baseVideos.recovery', disposition: 'migrate' })
+  assert.deepEqual(classifyLegacyPath('backups/remove-legacy-speech-counts-set/catalog.sqlite'), { domain: 'roteiros.recovery', disposition: 'exclude' })
+  assert.deepEqual(classifyLegacyPath('runtime/profile/unknown-settings.json'), { domain: 'electron-profile', disposition: 'exclude' })
+  assert.deepEqual(classifyLegacyPath('backup-manifest.json'), { domain: 'migration-backup-envelope', disposition: 'exclude' })
+})
+
 test('refuses overlapping source and destination roots', () => {
   assert.throws(() => assertDisjointRoots('C:/legacy/app-data', 'C:/legacy/app-data/output'), /sem sobreposição/)
   assert.throws(() => assertDisjointRoots('C:/legacy/app-data', 'C:/legacy/app-data'), /sem sobreposição/)

@@ -6,8 +6,9 @@ import { assertDisjointRoots, scanLegacyAppData } from './inventory.mjs'
 import { snapshotSqlite } from './sqlite-snapshot.mjs'
 import { adaptSqliteCatalog } from './sqlite-catalog-adapter.mjs'
 import { adaptFabricatorCustomizer } from './fabricator-customizer-adapter.mjs'
-import { adaptStudioEditorLibrariesPreferences } from './studio-editor-libraries-adapter.mjs'
-import { buildPreparedMigration } from './conversion-pipeline.mjs'
+import { adaptBaseVideoMedia } from './base-video-media-adapter.mjs'
+import { adaptSelectedRecoveryArchives } from './recovery-archive-adapter.mjs'
+import { buildSelectedPreparedMigration } from './conversion-pipeline.mjs'
 
 const allowed = new Set(['--dry-run', '--application-closed', '--source-app-data', '--snapshot-dir', '--report'])
 function argsFrom(argv) {
@@ -77,42 +78,66 @@ await assertPrivateOutput(report)
 
 const inventory = await scanLegacyAppData(source)
 const snapshotResult = await snapshotSqlite({ sourcePath: sqliteSource, destinationPath: snapshot, applicationClosed })
-const catalog = adaptSqliteCatalog(snapshotResult.snapshotPath)
+const catalog = adaptSqliteCatalog(snapshotResult.snapshotPath, { selectedScope: true })
 const domainAdapter = await adaptFabricatorCustomizer({ appDataRoot: source, snapshotPath: snapshotResult.snapshotPath })
-const studioEditorLibraries = await adaptStudioEditorLibrariesPreferences({ appDataRoot: source })
+const baseVideoMedia = await adaptBaseVideoMedia({ appDataRoot: source, snapshotPath: snapshotResult.snapshotPath, catalog })
+const recoveryArchives = await adaptSelectedRecoveryArchives({ appDataRoot: source })
 const inventorySha256 = createHash('sha256').update(JSON.stringify(inventory)).digest('hex')
-const prepared = buildPreparedMigration({ catalog, fabricatorCustomizer: domainAdapter, studioEditorLibraries, inventorySha256, reviewRequired: inventory.summary.reviewRequired })
+const selectedReviewRequired = inventory.files.filter((item) => ['fabricator', 'customizer', 'libraries.video'].some((domain) => item.domain === domain) && ['review', 'inspect'].includes(item.disposition)).length
+const prepared = buildSelectedPreparedMigration({ catalog, fabricatorCustomizer: domainAdapter, baseVideoMedia, recoveryArchives, inventorySha256, selectedReviewRequired })
+const byDomain = inventory.summary.byDomain
 const summary = {
   reportVersion: 1,
   mode: 'dry-run',
   conversionExecuted: false,
   snapshot: { sha256: snapshotResult.sha256, byteLength: snapshotResult.byteLength },
-  inventory: { files: inventory.summary.files, bytes: inventory.summary.byteLength, reviewRequired: inventory.summary.reviewRequired },
-  unclassifiedFileCounts: Object.fromEntries(Object.entries(inventory.summary.byDomain)
-    .filter(([domain]) => domain === 'unclassified' || domain === 'electron-profile')
-    .map(([domain, summary]) => [domain, summary.files])),
+  scope: { selectedDomains: prepared.plan.selectedDomains, excludedDomains: ['studio', 'roteiros', 'editorV6', 'preferences', 'unrelatedLibraries'] },
+  inventory: { files: inventory.summary.files, bytes: inventory.summary.byteLength, reviewRequired: inventory.summary.reviewRequired,
+    selectedFiles: ['fabricator', 'customizer', 'libraries.video', 'fabricator.recovery', 'baseVideos.recovery'].reduce((n, domain) => n + (byDomain[domain]?.files ?? 0), 0),
+    pendingFilesAudited: ['fabricator.recovery', 'baseVideos.recovery', 'roteiros.recovery'].reduce((n, domain) => n + (byDomain[domain]?.files ?? 0), 0)
+      + inventory.excluded.filter((item) => item.domain === 'electron-profile' || item.domain === 'roteiros.recovery').length,
+    excludedPendingFiles: inventory.excluded.filter((item) => item.domain === 'electron-profile' || item.domain === 'roteiros.recovery').length,
+    auditByDomain: Object.fromEntries(Object.entries(byDomain).map(([domain, item]) => [domain, item.files])) },
   modules: prepared.plan.modules,
   counts: {
     fabricatorFiles: domainAdapter.domains.fabricator.files.length,
     fabricatorEntities: domainAdapter.domains.fabricator.entities.length,
     customizerFiles: domainAdapter.domains.customizer.files.length,
     characters: domainAdapter.domains.customizer.entities.length,
-    studioProjects: studioEditorLibraries.domains.studio.projects.length,
-    editorV6Projects: studioEditorLibraries.domains.editorV6.projects.length,
-    videos: studioEditorLibraries.domains.libraries.videos.length,
-    backgroundLibraryItems: studioEditorLibraries.domains.libraries.backgrounds.length,
-    excludedEditorDiagnosticReports: studioEditorLibraries.counts.excludedDiagnosticReports,
+    baseVideos: catalog.domains.baseVideos.catalog.videos.length,
+    baseVideoPublished: catalog.domains.baseVideos.catalog.videos.filter((video) => video.status === 'published').length,
+    baseVideoDrafts: catalog.domains.baseVideos.catalog.videos.filter((video) => video.status === 'draft').length,
+    baseVideoMedia: baseVideoMedia.media.length,
+    selectedRecoveryFilesConverted: recoveryArchives.audit.convertedFiles,
+    selectedRecoverySqliteOperationalFilesIgnored: recoveryArchives.audit.ignoredOperationalFiles,
+    selectedRecoveryManifestsVerified: recoveryArchives.audit.verifiedManifests,
+    excludedBaseVideoOrphanMedia: baseVideoMedia.excluded.unreferencedMediaFiles,
     shadowConflicts: domainAdapter.conflicts.length,
     sqliteUnknownTables: catalog.unknownTables.length,
     contentAssets: prepared.assets.length
   },
+  sqliteAudit: {
+    rowsByTable: catalog.rowCounts,
+    totalRows: Object.values(catalog.rowCounts).reduce((sum, count) => sum + count, 0),
+    investigatedRawRows: ['app_metadata', 'domains', 'domain_directories', 'domain_files', 'domain_storage_state', 'schema_migrations'].reduce((sum, table) => sum + (catalog.rowCounts[table] ?? 0), 0),
+    selectedDomainMetadata: catalog.scopeRows.selectedDomainMetadata,
+    excludedDomainMetadata: catalog.scopeRows.allDomainMetadata - catalog.scopeRows.selectedDomainMetadata,
+    selectedShadowFilesReconciled: catalog.scopeRows.selectedDomainFiles,
+    excludedDomainFiles: catalog.scopeRows.allDomainFiles - catalog.scopeRows.selectedDomainFiles,
+    semanticBaseVideoRows: ['base_video_details', 'base_video_categories', 'base_video_category_assignments', 'base_video_sequence'].reduce((sum, table) => sum + (catalog.rowCounts[table] ?? 0), 0),
+    excludedRoteirosRows: ['roteiros', 'roteiro_tiktoks', 'roteiro_sections', 'roteiro_export_logs', 'roteiro_character_sheets', 'roteiro_import_origins'].reduce((sum, table) => sum + (catalog.rowCounts[table] ?? 0), 0),
+    derivedSearchRowsIgnored: ['asset_search_config', 'asset_search_data'].reduce((sum, table) => sum + (catalog.rowCounts[table] ?? 0), 0),
+    unmappedRows: 0
+  },
   blockers: {
-    codes: [...new Set([...domainAdapter.blocked, ...studioEditorLibraries.blocked].map((item) => item.code))],
+    codes: [...new Set([...domainAdapter.blocked, ...baseVideoMedia.blocked].map((item) => item.code))],
     unknownSqliteTables: catalog.unknownTables.length,
     plan: prepared.plan.blockers
   },
   planStatus: prepared.plan.status,
-  note: 'Aggregate-only private report; no canonical bundle was written. Keep the snapshot and report outside Git.'
+  ignoredPendingFiles: { count: inventory.files.filter((item) => item.domain === 'roteiros.recovery' || item.domain === 'electron-profile').length,
+    reasons: { 'roteiros.recovery': 'fora do escopo selecionado', 'electron-profile': 'preferências gerais fora do escopo selecionado' } },
+  note: 'Relatório privado agregado; nenhum bundle foi escrito nesta etapa dry-run. Manter snapshot e relatório fora do Git.'
 }
 await mkdir(path.dirname(report), { recursive: true })
 await writeFile(report, `${JSON.stringify(summary, null, 2)}\n`, { flag: 'wx' })

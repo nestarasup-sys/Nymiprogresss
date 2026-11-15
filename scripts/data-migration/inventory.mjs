@@ -24,6 +24,18 @@ const knownPrefixes = [
   ['media/thumbnails/', 'derived.thumbnails']
 ]
 
+const selectedBackupPrefixes = [
+  ['backups/face-expression-geometry-', 'fabricator.recovery'],
+  ['backups/face-expression-geometry-pre-transfer-', 'fabricator.recovery'],
+  ['backups/hair-dev-before-clear-', 'fabricator.recovery'],
+  ['backups/hair-gender-before-', 'fabricator.recovery'],
+  ['backups/preset-effects-before-', 'fabricator.recovery'],
+  ['backups/preset-effects-draft-sync-before-', 'fabricator.recovery'],
+  ['backups/preset-shadows-before-', 'fabricator.recovery'],
+  ['backups/legacy-video-import-', 'baseVideos.recovery'],
+  ['backups/remove-legacy-speech-counts-', 'roteiros.recovery']
+]
+
 function isWithin(root, candidate) {
   const relative = path.relative(root, candidate)
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
@@ -35,15 +47,17 @@ function samePath(left, right) {
 
 export function classifyLegacyPath(relativePath) {
   const normalized = relativePath.replace(/\\/g, '/')
+  if (normalized === 'backup-manifest.json') return { domain: 'migration-backup-envelope', disposition: 'exclude' }
   const firstSegment = normalized.split('/')[0]
   if (excludedRootDirectories.has(firstSegment.toLowerCase())) return { domain: 'operational', disposition: 'exclude' }
+  for (const [prefix, domain] of selectedBackupPrefixes) if (normalized.startsWith(prefix)) return { domain, disposition: domain === 'roteiros.recovery' ? 'exclude' : 'migrate' }
   if (normalized === 'runtime/profile/Local Storage' || normalized.startsWith('runtime/profile/Local Storage/')) {
     return { domain: 'preferences.localStorage', disposition: 'inspect' }
   }
   for (const [prefix, domain] of knownPrefixes) {
     if (normalized === prefix || normalized.startsWith(prefix)) return { domain, disposition: 'migrate' }
   }
-  if (normalized.startsWith('runtime/profile/')) return { domain: 'electron-profile', disposition: 'review' }
+  if (normalized.startsWith('runtime/profile/')) return { domain: 'electron-profile', disposition: 'exclude' }
   if (normalized.startsWith('database/')) return { domain: 'database', disposition: 'review' }
   return { domain: 'unclassified', disposition: 'review' }
 }

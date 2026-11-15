@@ -8,7 +8,7 @@
 6. Documentos antigos e workflows legados estão em `Lixo/`, **sem autoridade técnica**. A fonte de verdade é código + testes executados + dados versionados conferidos.
 7. Alterações irreversíveis em documentos e bibliotecas são proibidas durante a migração sem backups verificáveis.
 
-8. **Conversão definitiva dos dados:** o Nymiprogresss nativo utiliza exclusivamente um novo formato canônico, ainda a ser especificado após inventário do código e dados reais. Não deve implementar leitor de formatos antigos em tempo de execução. Um **conversor externo, de uso único**, lê o legado, transforma e valida os dados antes da estreia da aplicação nativa.
+8. **Conversão definitiva dos dados:** o Nymiprogresss nativo utiliza exclusivamente o formato canônico `nymiprogress.native-data` v1, descrito em `FORMATO-DADOS-NATIVOS-V1.md`. Não deve implementar leitor de formatos antigos em tempo de execução. Um **conversor externo, de uso único**, lê o legado, transforma e valida os dados antes da estreia da aplicação nativa.
 9. **Fonte local legada:** `C:\TRABALHO 2\OUTROS\GACHA EM C++`. Destino local do projeto novo: `C:\TRABALHO 2\OUTROS\NativeProgress`. O conversor roda na máquina do usuário, deve preservar a origem intocada, criar cópia de segurança e oferecer execução de ensaio (dry-run), relatórios e retomada segura. Nenhuma mídia pessoal ou banco real será publicada no repositório público.
 10. **Ordem de trabalho:** inventariar dados/código legados, desenhar esquema novo, implementar conversor com testes e validação de integridade; somente então migrar módulos gráficos para Qt/C++ que lerão apenas dados convertidos.
 

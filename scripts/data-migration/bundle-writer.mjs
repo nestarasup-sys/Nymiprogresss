@@ -106,6 +106,32 @@ export async function verifyVerifiedBackup(sourceRoot, backupRoot) {
   }
 }
 
+/** Verifies an immutable backup against its own manifest when the live application is running. */
+export async function verifyBackupArchive(backupRoot) {
+  const backup = path.resolve(backupRoot)
+  const rootStats = await lstat(backup)
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) throw new Error('Backup precisa ser uma pasta real.')
+  const manifest = JSON.parse(await readFile(path.join(backup, 'backup-manifest.json'), 'utf8'))
+  if (manifest.format !== 'nymiprogress.legacy-backup' || manifest.formatVersion !== 1 || !Array.isArray(manifest.files)) throw new Error('Manifesto do backup inválido.')
+  const expected = new Map()
+  for (const entry of manifest.files) {
+    const relativePath = assertSafeBundleRelativePath(entry.relativePath)
+    if (expected.has(relativePath) || !/^[a-f0-9]{64}$/.test(entry.sha256) || !Number.isSafeInteger(entry.byteLength) || entry.byteLength < 0) throw new Error('Manifesto do backup contém entrada inválida.')
+    expected.set(relativePath, entry)
+  }
+  const actualFiles = (await listFiles(backup)).filter((file) => file.relativePath !== 'backup-manifest.json')
+  if (actualFiles.length !== expected.size) throw new Error('Backup difere do manifesto em quantidade de arquivos.')
+  let byteLength = 0
+  for (const file of actualFiles) {
+    const entry = expected.get(file.relativePath)
+    if (!entry || entry.byteLength !== file.byteLength) throw new Error(`Backup difere do manifesto em caminho/tamanho: ${file.relativePath}.`)
+    const bytes = await readFile(path.join(backup, ...file.relativePath.split('/')))
+    if (hash(bytes) !== entry.sha256) throw new Error(`Hash do backup difere do manifesto: ${file.relativePath}.`)
+    byteLength += bytes.length
+  }
+  return { verified: true, fileCount: expected.size, byteLength, manifestSha256: hash(Buffer.from(JSON.stringify(manifest))) }
+}
+
 export async function writeCanonicalBundle({ manifest, assets = [], destinationRoot, execute = false }) {
   assertNativeDataManifest(manifest)
   if (!execute) return { written: false, assetCount: manifest.assets.length, destinationRoot: path.resolve(destinationRoot) }
@@ -135,6 +161,25 @@ export async function writeCanonicalBundle({ manifest, assets = [], destinationR
     await rm(stage, { recursive: true, force: true })
     throw reason
   }
+}
+
+export async function verifyCanonicalBundle(bundleRoot) {
+  const root = path.resolve(bundleRoot)
+  const rootStats = await lstat(root)
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) throw new Error('Bundle precisa ser uma pasta real.')
+  const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'))
+  assertNativeDataManifest(manifest)
+  const expected = new Map(manifest.assets.map((asset) => [asset.path, asset]))
+  expected.set('manifest.json', null)
+  const actual = await listFiles(root)
+  if (actual.length !== expected.size) throw new Error('Bundle contém arquivos ausentes ou extras.')
+  for (const file of actual) {
+    if (!expected.has(file.relativePath)) throw new Error(`Arquivo extra no bundle: ${file.relativePath}.`)
+    const bytes = await readFile(path.join(root, ...file.relativePath.split('/')))
+    const entry = expected.get(file.relativePath)
+    if (entry && (bytes.length !== entry.byteLength || hash(bytes) !== entry.sha256)) throw new Error(`Asset do bundle falhou na verificação: ${file.relativePath}.`)
+  }
+  return { verified: true, assetCount: manifest.assets.length, fileCount: actual.length, manifestSha256: hash(await readFile(path.join(root, 'manifest.json'))) }
 }
 
 export function buildBackupDestination(parent, sourceName) {
